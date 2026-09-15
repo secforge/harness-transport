@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/secforge/harness-transport/codexmsg"
 )
@@ -38,8 +39,15 @@ func newCodex(name string) *codexBackend {
 }
 
 // codexMaxChars is the daemon's hard limit, which it enforces with a
-// structured error rather than by truncating.
+// structured error rather than by truncating. It counts CHARACTERS, not
+// bytes — "Input exceeds the maximum length of 1048576 characters" — so a
+// byte count compared against it is a different quantity that happens to be
+// conservative for UTF-8 rather than a correct comparison.
 const codexMaxChars = 1 << 20
+
+// worstCaseUTF8 is how many bytes one character can occupy, for turning a
+// character limit into a byte floor that holds for content nobody inspected.
+const worstCaseUTF8 = 4
 
 // codexOverhead is reserved for the cursor trailer.
 const codexOverhead = 4 << 10
@@ -48,15 +56,22 @@ func (c *codexBackend) MaxIntactBytes() (int, error) {
 	if ok, reason := c.Available(); !ok {
 		return 0, fmt.Errorf("%s", reason)
 	}
-	return codexMaxChars - codexOverhead, nil
+	// A byte floor derived from a character limit: the daemon counts
+	// characters, this method promises bytes, and one character can be four
+	// of them. Fits answers exactly for a body already in hand.
+	return (codexMaxChars - codexOverhead) / worstCaseUTF8, nil
 }
 
-// Fits reports whether the daemon will take this delivery. The limit there
-// is counted in characters of the input rather than in encoded bytes, so
-// escaping does not enter into it.
+// Fits reports whether the daemon will take this delivery, counting what the
+// daemon counts: characters. Escaping does not enter into it, and neither
+// does byte length — an accented or CJK body is refused far too early by a
+// byte comparison, which is safe and wrong.
+//
+// The returned size is in bytes, since that is what a caller measuring a
+// payload has; the decision is made on runes.
 func (c *codexBackend) Fits(d Delivery) (bool, int, error) {
-	n := len(compose(d))
-	return n <= codexMaxChars, n, nil
+	text := compose(d)
+	return utf8.RuneCountInString(text) <= codexMaxChars, len(text), nil
 }
 
 func (c *codexBackend) Available() (bool, string) {
@@ -174,11 +189,11 @@ func (c *codexBackend) Deliver(ctx context.Context, d Delivery) (Receipt, error)
 	c.mu.Unlock()
 
 	text := compose(d)
-	if max, _ := c.MaxIntactBytes(); len(text) > max {
+	if ok, _, _ := c.Fits(d); !ok {
 		return Receipt{SentBytes: len(text)}, fmt.Errorf(
-			"message is %d bytes, over the %d the daemon accepts; "+
+			"message is %d characters, over the %d the daemon accepts; "+
 				"deliver a shorter body and leave the rest to be fetched from the cursor",
-			len(text), max)
+			utf8.RuneCountInString(text), codexMaxChars)
 	}
 
 	client, err := c.connect(ctx)

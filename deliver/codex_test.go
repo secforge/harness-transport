@@ -246,15 +246,36 @@ func TestCodexRefusesOversize(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The floor is a byte figure derived from a CHARACTER limit, so it sits
+	// well under it — one character can be four bytes.
 	if max <= 0 || max >= codexMaxChars {
 		t.Fatalf("MaxIntactBytes = %d, want a margin under the daemon's %d", max, codexMaxChars)
 	}
-	r, err := c.Deliver(context.Background(), Delivery{Cursor: "c", Body: strings.Repeat("x", max+1)})
+
+	// Refusal is decided on what the daemon counts, not on the floor.
+	r, err := c.Deliver(context.Background(), Delivery{Cursor: "c", Body: strings.Repeat("x", codexMaxChars+1)})
 	if err == nil {
-		t.Fatal("an oversize message must be refused before it is sent")
+		t.Fatal("a message over the daemon's character limit must be refused before it is sent")
 	}
 	if r.Truncated {
 		t.Error("the message was refused, not truncated")
+	}
+	if !strings.Contains(err.Error(), "characters") {
+		t.Errorf("the error should be stated in the units the daemon enforces: %v", err)
+	}
+
+	// ASCII well past the byte floor is fine, because the floor assumes
+	// four bytes per character and ASCII spends one. Refusing it would be
+	// safe and wrong.
+	if ok, _, _ := c.Fits(Delivery{Body: strings.Repeat("x", max*3)}); !ok {
+		t.Errorf("%d ASCII bytes should fit: the floor is not the limit", max*3)
+	}
+
+	// Multi-byte content is measured the way the daemon measures it. Four
+	// bytes per character, at the floor, is exactly the worst case the
+	// floor was derived for.
+	if ok, _, _ := c.Fits(Delivery{Body: strings.Repeat("\U0001F600", max/4)}); !ok {
+		t.Error("a body of four-byte characters at the floor should fit")
 	}
 }
 

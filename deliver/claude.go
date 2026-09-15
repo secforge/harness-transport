@@ -49,8 +49,16 @@ const claudeOverhead = 8 << 10
 // The receiver caps a line at 1 MiB and drops the whole connection over it,
 // and the body is JSON-escaped on the way, which can double the size of text
 // that is all quotes and newlines. Halving the budget makes the number one a
-// caller can rely on for any content, rather than one that holds until someone
+// caller can rely on for ANY content, rather than one that holds until someone
 // sends a transcript full of escapes.
+//
+// It is therefore lower than DemonstratedIntactBytes, which is measured on
+// ordinary text: a 1,000,019-byte payload of that shape enveloped to 1,014,898
+// bytes, comfortably inside the cap, because barely 1.4% of it needed
+// escaping. The same byte count of quote-dense content would not fit. The
+// enforced figure answers "what may I always send", the measured one answers
+// "what has been seen to arrive" — and a caller splitting messages wants the
+// first.
 func (c *claudeBackend) MaxIntactBytes() (int, error) {
 	return (udsmsg.MaxLineBytes - claudeOverhead) / 2, nil
 }

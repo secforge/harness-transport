@@ -152,14 +152,38 @@ type Deliverer interface {
 // boundary — splitting at a boundary requires having found one.
 //
 // Method: numbered-checkpoint ladder with sentinels and a nonce, delivered
-// over udsmsg to a live Claude Code 2.1.272 session, which reported the
-// highest checkpoint it could see and checked for gaps. 1, 4, 16, 32 and
-// 64 KB, all intact, no cut found (2026-09-15).
+// over udsmsg to live Claude Code 2.1.272 sessions, each of which reported the
+// highest checkpoint it could see and checked for gaps below it. 1, 4, 16, 32,
+// 64, 128, 256 and 512 KB and 1,000,019 bytes — every rung intact, no cut
+// found at any size (2026-09-15).
 //
-// MaxIntactBytes is a different quantity: the size above which this package
-// refuses to send, derived from the transport's cap. That one is a property of
-// this code; this one is a property of an experiment.
-const DemonstratedIntactBytes = 64 << 10
+// Two cautions the experiment itself produced. A receiver stops participating
+// long before the transport does: one session went silent after roughly 1.3 MB
+// across several messages, still accepting connections but answering nothing,
+// so capacity to hold is a separate limit from capacity to carry. And a
+// "truncation" at the size you are probing deserves suspicion — one rung came
+// back with a missing sentinel that turned out to have been deleted by the
+// sender, not lost in transit.
+//
+// This number is NOT comparable to a limit measured on any other delivery
+// path. A cut observed on one path says nothing about another: the
+// notification path this was compared against truncates around 500 runes,
+// which is three orders of magnitude lower.
+//
+// It exceeds MaxIntactBytes, and that is expected rather than a contradiction:
+// see that method for why the enforced figure is deliberately lower.
+//
+// IT IS NOT A RECOMMENDED SIZE. "Observed to arrive whole" and "safe to send"
+// are different claims, and the gap between them is the receiver's capacity to
+// keep working afterwards. A message that arrives perfectly still spends a
+// large and permanent fraction of a finite budget that every later message
+// shares, and nothing reports that it did — the send succeeds either way. One
+// receiver in this experiment stopped participating after roughly 1.3 MB
+// across several messages. Size a body by what a receiver can afford to
+// absorb, not by what the wire will carry; a sender choosing how much of a
+// receiver's context to consume is making a decision it has no standing to
+// make.
+const DemonstratedIntactBytes = 1_000_000
 
 // Option configures a Deliverer.
 type Option func(*options)

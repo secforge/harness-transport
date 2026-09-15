@@ -10,6 +10,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -31,6 +32,16 @@ const (
 	exitRefused  = 5 // denied, expired, refused or dropped
 	exitNoTarget = 6 // no such session
 )
+
+// isTerminal reports whether f is a terminal, so that a message can be read
+// from a pipe without a flag while an interactive run still shows usage.
+func isTerminal(f *os.File) bool {
+	fi, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	return fi.Mode()&os.ModeCharDevice != 0
+}
 
 // accepter returns a predicate deciding whether a frame that reached our inbox
 // is from the process we addressed.
@@ -120,6 +131,17 @@ func run() int {
 		return list(o.all)
 	}
 	text := strings.Join(flag.Args(), " ")
+	if text == "-" || (text == "" && !isTerminal(os.Stdin)) {
+		// A single argv string is capped at MAX_ARG_STRLEN (128 KiB on
+		// Linux), well under what this protocol carries, so a message near
+		// the wire limit can only arrive on stdin.
+		b, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "claude-send: read stdin: %v\n", err)
+			return exitError
+		}
+		text = strings.TrimRight(string(b), "\n")
+	}
 	if (o.to == 0 && o.toSocket == "") || text == "" {
 		usage()
 		return exitError

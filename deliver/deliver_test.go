@@ -211,18 +211,22 @@ func TestProcessWithNoHarnessHasNoTarget(t *testing.T) {
 
 // The two size figures answer different questions and must not be conflated:
 // one is what this code enforces, the other is what an experiment showed.
-func TestDemonstratedFloorIsBelowTheRefusalThreshold(t *testing.T) {
+func TestTheTwoSizeFiguresAnswerDifferentQuestions(t *testing.T) {
 	c := &claudeBackend{socket: "/tmp/x.sock"}
 	max, err := c.MaxIntactBytes()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if DemonstratedIntactBytes >= max {
-		t.Errorf("the demonstrated floor (%d) should sit below the refusal threshold (%d); "+
-			"if it ever exceeds it, the experiment has outgrown what the code will send",
-			DemonstratedIntactBytes, max)
+	// The measured figure exceeding the enforced one is expected, not a
+	// contradiction: the enforced one is halved so it holds for content that
+	// is all quotes and newlines, while the measurement used ordinary text
+	// that barely needed escaping. What must never happen is the enforced
+	// figure exceeding the transport cap it is derived from.
+	if max*2 >= udsmsg.MaxLineBytes {
+		t.Errorf("the refusal threshold (%d) must leave room for worst-case escaping under the %d cap",
+			max, udsmsg.MaxLineBytes)
 	}
-	if DemonstratedIntactBytes != 65536 {
+	if DemonstratedIntactBytes != 1_000_000 {
 		t.Errorf("DemonstratedIntactBytes = %d; change it only with a new experiment, and update the recorded method",
 			DemonstratedIntactBytes)
 	}

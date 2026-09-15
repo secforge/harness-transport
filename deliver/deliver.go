@@ -25,6 +25,24 @@
 // The library therefore does not refuse to address other agents. It has
 // nothing with which to address them.
 //
+// # The trailer
+//
+// Every delivered body ends with a bracketed trailer, and callers rely on
+// that: its absence means the message was cut in transit, so a reader may
+// treat an unterminated delivery as incomplete and decline to act on it.
+//
+// There are two forms, and a caller keying on the first alone will misread
+// the second as a missing marker:
+//
+//	[cursor: <anchor>]                              re-fetchable from the anchor
+//	[no cursor: this message cannot be re-fetched]  no anchor — typically a
+//	                                                notice the client wrote
+//	                                                itself rather than relayed
+//
+// A pending remainder appends " · more is waiting than this message carries"
+// to either form. So the rule to key on is "ends with a bracketed trailer",
+// not "ends with a cursor line".
+//
 // # Honesty about arrival
 //
 // Deliver reports what was observed, never what is hoped. The two backends

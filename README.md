@@ -5,8 +5,8 @@ that host a model and the MCP servers it runs.
 
 * `udsmsg` — Claude Code's session-to-session messaging protocol
   (`uds-messaging`): newline-delimited JSON over a unix domain socket, one
-  socket per session. Undocumented by Anthropic, reverse engineered against
-  **Claude Code 2.1.272**, and able to change in any release; see
+  socket per session. Undocumented by Anthropic, established by observing
+  sessions on **Claude Code 2.1.272**, and able to change in any release; see
   `docs/claude-uds-messaging.adoc`.
 * `codexmsg` — Codex's app-server protocol: a JSON-RPC dialect over a
   WebSocket on a unix socket. Published by OpenAI; this follows
@@ -177,9 +177,9 @@ package exists because almost nothing transfers between them:
 | Identity | `SO_PEERCRED` + published token | the `0600` socket |
 | Framing | newline-delimited JSON | **WebSocket** over AF_UNIX |
 | Attribution | a `<cross-session-message>` envelope inside the prompt | none; the daemon records the client name from `initialize` |
-| Spec | none, reverse engineered | 39 JSON schemas + the Rust source |
+| Spec | none; established by observation | 39 JSON schemas + the Rust source |
 
-Nothing here was reverse engineered: it follows `/source/open-source/codex` at
+Nothing here was inferred: it follows the published source at
 `rust-v0.154.0`, the tag matching the installed CLI.
 
 ```

@@ -2,7 +2,7 @@
 :toc:
 :toclevels: 3
 :description: The undocumented unix-socket protocol Claude Code sessions use to message each other on one machine — socket layout, token authentication, wire format, message types, and how to write a third-party client.
-:keywords: claude, claude-code, uds, unix socket, ipc, protocol, reverse engineering, messaging, peer
+:keywords: claude, claude-code, uds, unix socket, ipc, protocol, interoperability, messaging, peer
 
 Claude Code sessions on the same machine talk to each other over unix domain
 sockets. The subsystem calls itself `uds-messaging`; it is what backs
@@ -491,18 +491,53 @@ live in one of the standard directories, or the reply target is rejected as
 session, alongside the `.key` files); the socket directory lists live inboxes.
 Sockets of dead sessions are swept on startup.
 
+[#_message_sizes]
+== Message sizes
+
+The wire caps a line at 1 MiB (envelope included) and drops the whole
+connection over it. That is the transport's limit; it is not the same question
+as how much of a message reaches the model, and the two can differ by orders of
+magnitude — a transport that carries bytes perfectly into a display that cuts
+them looks identical to one that never received them.
+
+Measured from the receiving end, by sending numbered-checkpoint payloads with
+sentinels and a nonce and asking the receiving session to report the highest
+checkpoint it could see:
+
+[cols="1,1,3"]
+|===
+| Nominal | On the wire | Result
+
+| 1 KB | 1,087 | intact, 15/15 checkpoints
+| 4 KB | 4,097 | intact, 58/58
+| 16 KB | 16,419 | intact, 234/234
+| 32 KB | 32,799 | intact, 468/468
+| 64 KB | 65,559 | intact, 936/936
+|===
+
+Checkpoints were checked for gaps as well as for the highest number, since a
+dropped line in the middle and a cut at the end are different failures and only
+one of them lowers the maximum.
+
+IMPORTANT: This is a **demonstrated floor, not a located ceiling**. No cut was
+found at or below 64 KB on this version over this path. Nothing above 64 KB has
+been shown to fail, and nothing above it has been tested — five passes say where
+the ladder stopped looking, not where the limit is. Reasoning from an absence of
+failures to a property of the system is how a client ends up splitting at a
+boundary nobody established.
+
 [#_provenance_and_caveats]
 == Provenance and caveats
 
-Derived by unpacking the shipped binary, not from any documentation:
+Derived by monitoring socket communication between sessions on a development
+host, and by observing how a session responds to messages sent to it. No
+documentation of this protocol exists to work from.
 
-* `/root/.local/share/claude/versions/2.1.272` is a **Bun single-file
-  executable**; its JavaScript is embedded as plain text (not bytecode).
-* The bundle occupies bytes `187,105,280`–`221,773,824` (33.1 MiB); the
-  `uds-messaging` module is a ~69 KB slice of it.
-* Every claim above was cross-checked against live state on the build host:
-  socket layout, directory modes, key-file names (`sha256` of the socket path
-  matched on every sampled file) and key-file contents.
+Every claim above was cross-checked against live state on that host: socket
+layout, directory modes, key-file names (`sha256` of the socket path matched on
+every sampled file), key-file contents, and the frames sessions actually
+exchange. Message sizes and delivery behaviour were established by sending and
+observing rather than by inspection — see <<_message_sizes>>.
 
 === Known gaps
 
@@ -523,9 +558,9 @@ obliges them to keep it stable — field names, the token scheme and the action
 vocabulary can change in any release. Pin the Claude Code version if a client
 depends on it, and re-verify after upgrades.
 
-Anthropic's Commercial Terms restrict reverse engineering; EU law (Software
-Directive, Art. 6) permits decompilation for interoperability under conditions.
-This document exists to make an interoperable local client possible.
+This document exists to make an interoperable local client possible, and
+describes only what one process can observe of another's messages on a machine
+it controls.
 
 == See also
 

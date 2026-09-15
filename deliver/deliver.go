@@ -143,6 +143,24 @@ type Deliverer interface {
 	Close() error
 }
 
+// DemonstratedIntactBytes is the largest message observed to arrive whole and
+// be quoted back in full by a receiving model.
+//
+// It is a floor, not a ceiling. It records where an experiment stopped
+// looking, not where the limit is: nothing above it has been shown to fail,
+// and nothing above it has been tested. Do not split a message at this
+// boundary — splitting at a boundary requires having found one.
+//
+// Method: numbered-checkpoint ladder with sentinels and a nonce, delivered
+// over udsmsg to a live Claude Code 2.1.272 session, which reported the
+// highest checkpoint it could see and checked for gaps. 1, 4, 16, 32 and
+// 64 KB, all intact, no cut found (2026-09-15).
+//
+// MaxIntactBytes is a different quantity: the size above which this package
+// refuses to send, derived from the transport's cap. That one is a property of
+// this code; this one is a property of an experiment.
+const DemonstratedIntactBytes = 64 << 10
+
 // Option configures a Deliverer.
 type Option func(*options)
 

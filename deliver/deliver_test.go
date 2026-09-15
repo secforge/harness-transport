@@ -208,3 +208,22 @@ func TestProcessWithNoHarnessHasNoTarget(t *testing.T) {
 		t.Errorf("reason = %q, want it to say no harness launched this process", reason)
 	}
 }
+
+// The two size figures answer different questions and must not be conflated:
+// one is what this code enforces, the other is what an experiment showed.
+func TestDemonstratedFloorIsBelowTheRefusalThreshold(t *testing.T) {
+	c := &claudeBackend{socket: "/tmp/x.sock"}
+	max, err := c.MaxIntactBytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if DemonstratedIntactBytes >= max {
+		t.Errorf("the demonstrated floor (%d) should sit below the refusal threshold (%d); "+
+			"if it ever exceeds it, the experiment has outgrown what the code will send",
+			DemonstratedIntactBytes, max)
+	}
+	if DemonstratedIntactBytes != 65536 {
+		t.Errorf("DemonstratedIntactBytes = %d; change it only with a new experiment, and update the recorded method",
+			DemonstratedIntactBytes)
+	}
+}

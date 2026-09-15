@@ -3,7 +3,7 @@
 // domain socket, one socket per session.
 //
 // The protocol is undocumented by Anthropic and can change in any release.
-// See docs/claude-uds-messaging.adoc for the reverse-engineered reference
+// See docs/claude-uds-messaging.adoc for the observed reference
 // this package targets (Claude Code 2.1.272).
 package udsmsg
 

@@ -42,6 +42,34 @@ func TestComposeAlwaysCarriesTheCursor(t *testing.T) {
 	}
 }
 
+// The trailer is an end marker: a caller distinguishes a complete delivery
+// from one cut in transit by whether it is there. So it must be there on
+// every delivery, including the ones that carry no cursor — a client's own
+// notices, which are exactly the messages a reader cannot afford to treat as
+// truncated.
+func TestComposeAlwaysEndsWithATrailer(t *testing.T) {
+	for _, d := range []Delivery{
+		{Cursor: "c-1", Body: "x"},
+		{Cursor: "c-1", Body: "x", More: true},
+		{Body: "a notice with no anchor"},
+		{Body: "a notice with no anchor", More: true},
+		{Cursor: "c-1"},
+		{},
+	} {
+		got := compose(d)
+		if !strings.HasSuffix(got, "]") {
+			t.Errorf("compose(%+v) = %q; every delivery must end with a trailer, or its absence "+
+				"cannot mean truncation", d, got)
+		}
+		if d.Cursor == "" && !strings.Contains(got, "no cursor") {
+			t.Errorf("compose(%+v) = %q; a delivery with no anchor should say so", d, got)
+		}
+		if d.More && !strings.Contains(got, "more is waiting") {
+			t.Errorf("compose(%+v) = %q; the more flag was dropped", d, got)
+		}
+	}
+}
+
 func TestThreadIDFromMeta(t *testing.T) {
 	id, err := threadIDFromMeta(map[string]any{"threadId": "01a0-abc", "itemId": "x"})
 	if err != nil || id != "01a0-abc" {

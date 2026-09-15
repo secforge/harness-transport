@@ -282,21 +282,25 @@ func IsNoThreadID(err error) bool { return err == errNoMeta }
 func compose(d Delivery) string {
 	var b strings.Builder
 	b.WriteString(d.Body)
-	if d.Cursor == "" && !d.More {
-		return b.String()
-	}
 	if b.Len() > 0 {
 		b.WriteString("\n\n")
 	}
 	b.WriteString("[")
-	if d.Cursor != "" {
+	switch {
+	case d.Cursor != "":
 		fmt.Fprintf(&b, "cursor: %s", d.Cursor)
+	default:
+		// A delivery with no anchor still gets a trailer, and says why it
+		// has none. Callers use the trailer as an end marker — its absence
+		// means the message was cut in transit — so a message that ended
+		// without one would be indistinguishable from a truncated one.
+		// That bites hardest on a client's own notices, which are the
+		// messages most likely to carry no cursor and the ones a reader
+		// can least afford to distrust.
+		b.WriteString("no cursor: this message cannot be re-fetched")
 	}
 	if d.More {
-		if d.Cursor != "" {
-			b.WriteString(" · ")
-		}
-		b.WriteString("more is waiting than this message carries")
+		b.WriteString(" · more is waiting than this message carries")
 	}
 	b.WriteString("]")
 	return b.String()

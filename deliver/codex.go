@@ -45,9 +45,15 @@ func newCodex(name string) *codexBackend {
 // conservative for UTF-8 rather than a correct comparison.
 const codexMaxChars = 1 << 20
 
-// worstCaseUTF8 is how many bytes one character can occupy, for turning a
-// character limit into a byte floor that holds for content nobody inspected.
-const worstCaseUTF8 = 4
+// No conversion is needed between the daemon's character limit and the byte
+// figure MaxIntactBytes hands out, and the intuition that there is one is
+// backwards. In UTF-8 every character costs at least one byte, so for any
+// string characters <= bytes: a body within a byte budget of N can never
+// exceed N characters. The multiplication by four applies in the opposite
+// direction — bounding bytes from a character budget — which is not the
+// direction this method runs. It holds under UTF-16 counting too, where a
+// four-byte character is two units and ASCII is the worst case at one unit
+// per byte.
 
 // codexOverhead is reserved for the cursor trailer.
 const codexOverhead = 4 << 10
@@ -56,10 +62,7 @@ func (c *codexBackend) MaxIntactBytes() (int, error) {
 	if ok, reason := c.Available(); !ok {
 		return 0, fmt.Errorf("%s", reason)
 	}
-	// A byte floor derived from a character limit: the daemon counts
-	// characters, this method promises bytes, and one character can be four
-	// of them. Fits answers exactly for a body already in hand.
-	return (codexMaxChars - codexOverhead) / worstCaseUTF8, nil
+	return codexMaxChars - codexOverhead, nil
 }
 
 // Fits reports whether the daemon will take this delivery, counting what the

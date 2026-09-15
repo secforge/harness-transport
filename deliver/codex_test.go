@@ -246,8 +246,9 @@ func TestCodexRefusesOversize(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The floor is a byte figure derived from a CHARACTER limit, so it sits
-	// well under it — one character can be four bytes.
+	// The floor is bytes against a character limit, which needs no
+	// conversion: characters <= bytes, so a byte budget at the limit is
+	// already safe. Only the trailer overhead comes off.
 	if max <= 0 || max >= codexMaxChars {
 		t.Fatalf("MaxIntactBytes = %d, want a margin under the daemon's %d", max, codexMaxChars)
 	}
@@ -264,18 +265,12 @@ func TestCodexRefusesOversize(t *testing.T) {
 		t.Errorf("the error should be stated in the units the daemon enforces: %v", err)
 	}
 
-	// ASCII well past the byte floor is fine, because the floor assumes
-	// four bytes per character and ASCII spends one. Refusing it would be
-	// safe and wrong.
-	if ok, _, _ := c.Fits(Delivery{Body: strings.Repeat("x", max*3)}); !ok {
-		t.Errorf("%d ASCII bytes should fit: the floor is not the limit", max*3)
-	}
-
-	// Multi-byte content is measured the way the daemon measures it. Four
-	// bytes per character, at the floor, is exactly the worst case the
-	// floor was derived for.
+	// A body of four-byte characters filling the whole byte floor is the
+	// case the discarded division was meant to protect against. It fits,
+	// because those bytes buy only a quarter as many characters — which is
+	// the inequality running in this method's favour rather than against it.
 	if ok, _, _ := c.Fits(Delivery{Body: strings.Repeat("\U0001F600", max/4)}); !ok {
-		t.Error("a body of four-byte characters at the floor should fit")
+		t.Error("four-byte characters filling the byte floor should fit: characters <= bytes")
 	}
 }
 

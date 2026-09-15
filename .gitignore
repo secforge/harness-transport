@@ -1,0 +1,3 @@
+# Binaries built in place by `go build -o`; anchored so cmd/ source is not caught.
+/claude-send
+/codex-send

@@ -43,6 +43,16 @@
 // to either form. So the rule to key on is "ends with a bracketed trailer",
 // not "ends with a cursor line".
 //
+// Read it POSITIONALLY: the trailer is the LAST line, not any bracketed line.
+// A body can legitimately contain one that looks like it — a relay quoting a
+// delivered message, a review pasting an example, a person writing a note in
+// the same shape — and such a line will name an older cursor or none at all.
+// The marker is deliberately readable rather than unforgeable, because it is
+// read by a model: an unpredictable per-delivery nonce would defeat quoting
+// at the cost of a marker nobody can recognise. Keying on the last line
+// costs nothing and survives quoting; keying on the first bracket that
+// matches does not.
+//
 // # Honesty about arrival
 //
 // Deliver reports what was observed, never what is hoped. The two backends

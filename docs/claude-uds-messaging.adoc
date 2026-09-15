@@ -550,6 +550,18 @@ truncation, the cost is cumulative and shared — a large message that arrives
 perfectly still spends a permanent fraction of a budget every later message
 draws on.
 
+The evidence does not yet separate two explanations. One receiver died after
+1.29 MB across four messages; another survived 1.00 MB in one. That is
+consistent with a total-volume ceiling and equally consistent with the fourth
+message simply being the one that landed on it — two data points cannot tell
+them apart, and this document does not pick the tidier reading.
+
+The experiment that would settle it, recorded so nobody has to re-derive it:
+give one fresh receiver 4 × 320 KB and another 1 × 1.28 MB — same total,
+different message counts. If only the first stops, the cost is per-message
+overhead; if both stop, it is volume; if neither, the timing in the original
+run was coincidence.
+
 So "how large may one message be" is the wrong question to size a client by.
 The number to budget against is how much a receiver can absorb in total, and a
 sender choosing how much of a receiver's context to consume is making a

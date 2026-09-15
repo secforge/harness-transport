@@ -44,23 +44,47 @@ func defaultSenderName() string {
 // attribution wrapper and the cursor trailer.
 const claudeOverhead = 8 << 10
 
+// worstCaseEscape is how much JSON encoding can inflate a body, measured
+// rather than assumed (encoding/json, 2026-09-15, 1000-byte samples):
+//
+//	a           x1    "  \  \n   x2    <  >  &  0x01   x6
+//
+// The x6 cases are the ones that matter and the ones easy to miss: Go
+// escapes <, > and & to \u003c-style sequences by default, so HTML, XML,
+// code, or a quoted protocol envelope inflates six-fold where prose does not
+// inflate at all. An earlier version of this file reserved a factor of two,
+// which was true of quotes and newlines and false of every angle bracket.
+const worstCaseEscape = 6
+
 // MaxIntactBytes returns a floor rather than the true ceiling.
 //
-// The receiver caps a line at 1 MiB and drops the whole connection over it,
-// and the body is JSON-escaped on the way, which can double the size of text
-// that is all quotes and newlines. Halving the budget makes the number one a
-// caller can rely on for ANY content, rather than one that holds until someone
-// sends a transcript full of escapes.
+// The receiver caps a line at 1 MiB and drops the whole CONNECTION over it,
+// not merely the message, so this number has to hold for content the caller
+// has not looked at. It is therefore the cap divided by the worst-case
+// escape expansion — see worstCaseEscape — and not by the factor of two that
+// quotes and newlines would suggest.
 //
-// It is therefore lower than DemonstratedIntactBytes, which is measured on
-// ordinary text: a 1,000,019-byte payload of that shape enveloped to 1,014,898
-// bytes, comfortably inside the cap, because barely 1.4% of it needed
-// escaping. The same byte count of quote-dense content would not fit. The
-// enforced figure answers "what may I always send", the measured one answers
-// "what has been seen to arrive" — and a caller splitting messages wants the
-// first.
+// The result is far below what ordinary text achieves: a 1,000,019-byte
+// payload of prose enveloped to 1,014,898 bytes and arrived whole, because
+// barely 1.4% of it needed escaping. That is what DemonstratedIntactBytes
+// records. This one answers a different question — "what may I send without
+// having inspected it" — and a caller sizing a split wants this one. A caller
+// that has the body in hand can ask Fits instead and use the real ceiling.
 func (c *claudeBackend) MaxIntactBytes() (int, error) {
-	return (udsmsg.MaxLineBytes - claudeOverhead) / 2, nil
+	return (udsmsg.MaxLineBytes - claudeOverhead) / worstCaseEscape, nil
+}
+
+// Fits measures the delivery as the frame that would actually be sent,
+// sharing its construction with the send path so the two cannot disagree.
+func (c *claudeBackend) Fits(d Delivery) (bool, int, error) {
+	c.mu.Lock()
+	name := c.name
+	c.mu.Unlock()
+	size, fits, err := udsmsg.EncodedUserSize(udsmsg.User{
+		Text:        compose(d),
+		Attribution: &udsmsg.CrossSession{Name: name, Mode: udsmsg.ModePrompting},
+	})
+	return fits, size, err
 }
 
 func (c *claudeBackend) Available() (bool, string) {

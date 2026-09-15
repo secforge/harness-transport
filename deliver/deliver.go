@@ -150,8 +150,15 @@ type Deliverer interface {
 	// explaining a negative that can be shown to a model.
 	Available() (bool, string)
 	// MaxIntactBytes is the largest Body that will be delivered whole. It is
-	// a guaranteed floor, not the point at which delivery starts failing.
+	// a guaranteed floor, not the point at which delivery starts failing:
+	// it must hold for content the caller has not inspected, so it assumes
+	// the worst-case encoding expansion. Ordinary text goes far higher.
 	MaxIntactBytes() (int, error)
+	// Fits reports whether this exact delivery will be sent whole, and how
+	// many bytes it occupies on the wire. A caller holding the body can ask
+	// this instead of sizing against the worst case — the difference is
+	// roughly sixfold for prose.
+	Fits(d Delivery) (ok bool, wireBytes int, err error)
 	// Adopt latches the target from an inbound MCP request's _meta. It is a
 	// no-op where the target comes from the environment. Calling it on every
 	// request is free and is the recommended usage: a request without meta

@@ -2,6 +2,7 @@ package udsmsg
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"time"
@@ -108,14 +109,33 @@ type User struct {
 // own transcript, not on this connection. Delivery status and any reply
 // arrive at the From address, which requires an inbox of your own.
 func (c *Client) SendUser(u User) (msgID string, err error) {
+	f, err := BuildUserFrame(&u)
+	if err != nil {
+		return "", err
+	}
+	if err := c.Send(f); err != nil {
+		return "", err
+	}
+	return u.MsgID, nil
+}
+
+// BuildUserFrame renders a User as the frame that would be sent, filling in
+// the fields SendUser fills in. It is exported so a caller can measure what a
+// send would cost without sending it — see EncodedUserSize — with no second
+// construction that could drift from this one.
+//
+// It takes a pointer because it completes the User in place: a caller that
+// measures and then sends reuses the same generated msg_id rather than
+// getting a different one on each call.
+func BuildUserFrame(u *User) (*Frame, error) {
 	if u.MsgID == "" {
 		u.MsgID = NewMsgID()
 	}
 	if !MsgIDPattern.MatchString(u.MsgID) {
-		return "", fmt.Errorf("msg_id %q is not a UUID; the receiver would not correlate it", u.MsgID)
+		return nil, fmt.Errorf("msg_id %q is not a UUID; the receiver would not correlate it", u.MsgID)
 	}
 	if u.From != "" && !ValidAddress(u.From) {
-		return "", fmt.Errorf("reply address %q is not well-shaped", u.From)
+		return nil, fmt.Errorf("reply address %q is not well-shaped", u.From)
 	}
 	if u.Priority == "" {
 		u.Priority = PriorityNext
@@ -124,7 +144,7 @@ func (c *Client) SendUser(u User) (msgID string, err error) {
 	if u.Attribution != nil {
 		content = u.Attribution.Wrap(content)
 	}
-	f := &Frame{
+	return &Frame{
 		MsgV:            MsgVersion,
 		Type:            TypeUser,
 		MsgID:           u.MsgID,
@@ -135,11 +155,27 @@ func (c *Client) SendUser(u User) (msgID string, err error) {
 		Message:         &UserMessage{Role: "user", Content: content},
 		FileAttachments: u.Attachments,
 		UUID:            u.UUID,
+	}, nil
+}
+
+// EncodedUserSize reports how many bytes the frame for u would occupy on the
+// wire, newline included, and whether that is within the receiver's line cap.
+//
+// A line over the cap costs the whole connection rather than just the
+// message, so a caller holding a large body should ask this rather than
+// reason about escaping: JSON inflates "<", ">", "&" and control characters
+// six-fold, which no rule of thumb about quotes and newlines predicts.
+func EncodedUserSize(u User) (size int, fits bool, err error) {
+	f, err := BuildUserFrame(&u)
+	if err != nil {
+		return 0, false, err
 	}
-	if err := c.Send(f); err != nil {
-		return "", err
+	b, err := json.Marshal(f)
+	if err != nil {
+		return 0, false, fmt.Errorf("marshal frame: %w", err)
 	}
-	return u.MsgID, nil
+	size = len(b) + 1 // the newline EncodeFrame appends
+	return size, size <= MaxLineBytes, nil
 }
 
 // SendControl writes a control frame, filling in the type.

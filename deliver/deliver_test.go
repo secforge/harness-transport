@@ -259,3 +259,44 @@ func TestTheTwoSizeFiguresAnswerDifferentQuestions(t *testing.T) {
 			DemonstratedIntactBytes)
 	}
 }
+
+// The floor must hold for content nobody inspected. JSON inflates "<", ">",
+// "&" and control characters sixfold — not twofold, as quotes and newlines
+// suggest — so a body of angle brackets at exactly MaxIntactBytes has to
+// still fit the wire, or the number is a promise the transport cannot keep.
+func TestWorstCaseContentAtTheFloorStillFits(t *testing.T) {
+	p := startParent(t)
+	d := newClaude(p.srv.Path(), "", "test-client")
+	max, err := d.MaxIntactBytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, worst := range []string{"<", ">", "&", "\x01", `"`, "\n"} {
+		body := strings.Repeat(worst, max)
+		ok, wire, err := d.Fits(Delivery{Body: body})
+		if err != nil {
+			t.Fatalf("Fits(%q x %d): %v", worst, max, err)
+		}
+		if !ok {
+			t.Errorf("a %d-byte body of %q encodes to %d bytes, over the cap — "+
+				"MaxIntactBytes promises more than the transport accepts", max, worst, wire)
+		}
+	}
+}
+
+// Fits is the escape hatch from the worst case: prose reaches far higher
+// than the floor, and a caller holding the body should not be held to a
+// limit derived from content it does not have.
+func TestFitsAllowsFarMoreProseThanTheFloor(t *testing.T) {
+	p := startParent(t)
+	d := newClaude(p.srv.Path(), "", "test-client")
+	max, _ := d.MaxIntactBytes()
+
+	ok, wire, err := d.Fits(Delivery{Cursor: "c", Body: strings.Repeat("ordinary prose ", max/3)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Errorf("prose of %d bytes did not fit (%d on the wire); the floor should not bind text that does not escape", max*5, wire)
+	}
+}

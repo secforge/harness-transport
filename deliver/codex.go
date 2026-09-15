@@ -51,6 +51,14 @@ func (c *codexBackend) MaxIntactBytes() (int, error) {
 	return codexMaxChars - codexOverhead, nil
 }
 
+// Fits reports whether the daemon will take this delivery. The limit there
+// is counted in characters of the input rather than in encoded bytes, so
+// escaping does not enter into it.
+func (c *codexBackend) Fits(d Delivery) (bool, int, error) {
+	n := len(compose(d))
+	return n <= codexMaxChars, n, nil
+}
+
 func (c *codexBackend) Available() (bool, string) {
 	c.mu.Lock()
 	thread, disabled := c.thread, c.disabled

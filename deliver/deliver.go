@@ -271,6 +271,46 @@ const (
 	EnvClaudeToken = "CLAUDE_CODE_MESSAGING_TOKEN"
 )
 
+// ClearEnvForTesting unsets every environment variable this package reads to
+// find a harness, and returns a function restoring exactly what was there.
+//
+// A test binary inherits its launching harness's environment, which makes it
+// indistinguishable from the process that ought to be delivering — so a suite
+// that exercises a delivery path without this fires its fixtures into a live
+// conversation. That has happened; it is why this exists.
+//
+// It lives here rather than in each caller because the list of variables that
+// must be cleared is the list this package reads, and a caller enumerating
+// them by hand is correct only until this package learns another one. A guard
+// that clears the Claude pair alone still delivers from a Codex shell-tool
+// child, whose target arrives in CODEX_THREAD_ID and which no amount of
+// unsetting CLAUDE_CODE_MESSAGING_SOCKET touches.
+func ClearEnvForTesting() func() {
+	saved := map[string]*string{}
+	for _, k := range harnessEnv {
+		if v, ok := os.LookupEnv(k); ok {
+			v := v
+			saved[k] = &v
+		} else {
+			saved[k] = nil
+		}
+		os.Unsetenv(k)
+	}
+	return func() {
+		for k, v := range saved {
+			if v == nil {
+				os.Unsetenv(k)
+				continue
+			}
+			os.Setenv(k, *v)
+		}
+	}
+}
+
+// harnessEnv is every variable Open consults. Adding a backend means adding
+// its variables here, in the same package, next to the code that reads them.
+var harnessEnv = []string{EnvClaudeSocket, EnvClaudeToken, EnvCodexThread, EnvCodexSession}
+
 // metaThreadID is the key the Codex harness stamps into each MCP request's _meta.
 const metaThreadID = "threadId"
 

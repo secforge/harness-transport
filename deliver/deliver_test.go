@@ -2,6 +2,7 @@ package deliver
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
 
@@ -298,5 +299,31 @@ func TestFitsAllowsFarMoreProseThanTheFloor(t *testing.T) {
 	}
 	if !ok {
 		t.Errorf("prose of %d bytes did not fit (%d on the wire); the floor should not bind text that does not escape", max*5, wire)
+	}
+}
+
+// A guard that clears one backend's variables leaves the other backend live.
+// This is the whole reason the helper belongs in this package: the list of
+// what to clear is the list of what is read.
+func TestClearEnvForTestingCoversEveryBackend(t *testing.T) {
+	t.Setenv(EnvClaudeSocket, "/run/user/0/cc-socks/4242.sock")
+	t.Setenv(EnvClaudeToken, "cafebabe")
+	t.Setenv(EnvCodexThread, "01a0-live-thread")
+
+	restore := ClearEnvForTesting()
+	for _, k := range harnessEnv {
+		if v, ok := os.LookupEnv(k); ok {
+			t.Errorf("%s survived as %q; a delivery path would still find a harness", k, v)
+		}
+	}
+	// With nothing inherited, the Codex backend must not have latched a
+	// target from the environment either.
+	if c, ok := Open().(*codexBackend); ok && c.thread != "" {
+		t.Errorf("Codex target %q latched despite a cleared environment", c.thread)
+	}
+
+	restore()
+	if os.Getenv(EnvClaudeSocket) != "/run/user/0/cc-socks/4242.sock" || os.Getenv(EnvCodexThread) != "01a0-live-thread" {
+		t.Error("restore did not put the environment back")
 	}
 }

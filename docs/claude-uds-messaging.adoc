@@ -170,7 +170,7 @@ claimed address does not match the pid's registry entry.
 
 A message whose `session_id` does not match the receiving session is dropped
 (_"Dropping … message: session_id mismatch (got X, expected Y)"_), and a message
-that appears to originate from the receiver itself is marked `selfSent`. [.red]#[code]#
+that appears to originate from the receiver itself is marked as self-sent. [.red]#[code]#
 
 == Wire format
 
@@ -178,7 +178,7 @@ that appears to originate from the receiver itself is marked `selfSent`. [.red]#
   close, so a final line without a newline still arrives.
 * A connection that sends **no complete line within 30 s**
   is closed. [.red]#[code]# The exact figure is from the binary.
-* A line exceeding **1 MiB** (`jat=1048576`) is dropped along with the connection. [.red]#[code]#
+* A line exceeding **1 MiB** (1,048,576 bytes) is dropped along with the connection. [.red]#[code]#
   Never reached in testing — the largest measured line was 1,014,898 bytes, just
   under it, so the cap is a read constant, not an observed boundary.
 * Parse failures are logged and skipped, not fatal: _"Failed to parse JSON

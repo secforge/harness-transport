@@ -3,8 +3,10 @@ package udsmsg
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
+	"os"
 	"time"
 )
 
@@ -72,10 +74,15 @@ func DialPID(ctx context.Context, pid int) (*Client, error) {
 // Target returns the destination this client is connected to.
 func (c *Client) Target() Target { return c.target }
 
-// Authenticated reports whether this connection presented a token. False
-// means the receiver accepted it unauthenticated — or will destroy it without
-// saying why, on a platform where auth is required. See Dial.
-func (c *Client) Authenticated() bool { return c.target.Token != "" }
+// PresentedToken reports whether this connection sent an auth frame. It is a
+// fact about what we did, NOT a verdict: a wrong token presents exactly as a
+// right one, and nothing on the wire distinguishes them where auth is
+// optional. Measured against a live 2.1.272 session — right token, wrong
+// token and no token all left the connection open and indistinguishable.
+//
+// It was called Authenticated for about ten minutes, which claimed a result
+// this side cannot observe. See Dial and CheckAccepted for what can be.
+func (c *Client) PresentedToken() bool { return c.target.Token != "" }
 
 // Send writes one frame as a single line.
 func (c *Client) Send(f *Frame) error {
@@ -87,6 +94,47 @@ func (c *Client) Send(f *Frame) error {
 		return fmt.Errorf("write frame: %w", err)
 	}
 	return nil
+}
+
+// CheckAccepted reports whether the receiver has REJECTED what we sent, by
+// waiting to see whether it closes the connection.
+//
+// There is no positive acknowledgement to wait for: nothing is ever sent back
+// on this socket — a status, an idle notice or a reply all go to the address
+// in `from`, on a connection of their own — so a read here blocks forever
+// while the receiver is content. What a rejecting receiver does instead is
+// destroy the connection: authRequired with a missing or wrong token drops
+// every line and closes, as does a session_id mismatch or an oversize line,
+// and none of them says why.
+//
+// So this turns that silence into a signal. nil means the receiver had not
+// closed the connection within wait, which is the most that can be observed
+// from here — it is NOT proof the message reached anyone, and it cannot
+// distinguish "authenticated successfully" from "authentication was not
+// required", because those look identical on the wire and on every platform
+// where auth is optional they are the same thing.
+//
+// A non-nil error means the connection went away right after we spoke, and on
+// a receiver that requires authentication an unauthenticated client gets
+// exactly that with nothing else. Call PresentedToken to know whether a token
+// was even presented, which is what decides how to phrase the diagnosis.
+func (c *Client) CheckAccepted(wait time.Duration) error {
+	if err := c.conn.SetReadDeadline(time.Now().Add(wait)); err != nil {
+		return err
+	}
+	defer c.conn.SetReadDeadline(time.Time{})
+	var discard [1]byte
+	_, err := c.conn.Read(discard[:])
+	switch {
+	case err == nil:
+		// Unexpected: nothing is supposed to arrive here. Not a rejection.
+		return nil
+	case errors.Is(err, os.ErrDeadlineExceeded):
+		return nil // still open, which is as much as silence can say
+	default:
+		return fmt.Errorf("the receiver closed the connection immediately after our frames, "+
+			"which is what it does when it refuses them and it sends no reason: %w", err)
+	}
 }
 
 // Close closes the connection. The receiver parses any trailing buffer before

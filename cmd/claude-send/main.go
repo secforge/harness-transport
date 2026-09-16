@@ -65,6 +65,17 @@ func accepter(target udsmsg.Target, anySender bool, progress func(string, ...any
 	}
 	var warned bool
 	return func(p *udsmsg.Peer) bool {
+		if !p.Identified {
+			// No identity at all, rather than a pid that happens not to
+			// match. Comparing against it would silently reject everything
+			// on a platform where the kernel answers no such question.
+			if !warned {
+				warned = true
+				progress("frames are arriving from a peer the kernel will not identify on this " +
+					"platform, so they cannot be told from anyone else's: hearing them anyway")
+			}
+			return true
+		}
 		if int(p.PID) == want {
 			return true
 		}

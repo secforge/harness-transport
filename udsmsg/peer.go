@@ -1,9 +1,7 @@
 package udsmsg
 
 import (
-	"fmt"
-	"net"
-	"syscall"
+	"errors"
 )
 
 // AuthIdentity is the identity a connection established by presenting a
@@ -19,8 +17,10 @@ const (
 // Peer is the verified identity of a connected client, derived from the
 // socket's credentials independently of any token it presented.
 type Peer struct {
-	// PID, UID and GID come from SO_PEERCRED and cannot be forged by the
-	// client.
+	// PID, UID and GID come from the kernel, not from anything the client
+	// sent, so they cannot be forged. Where the platform exposes no such
+	// call, peerCred fails with ErrPeerCredsUnavailable rather than
+	// returning a Peer that looks identified and is not.
 	PID int32
 	UID uint32
 	GID uint32
@@ -34,34 +34,21 @@ type Peer struct {
 	SelfSent bool
 	// Addr is the local socket the peer connected to.
 	Addr string
+	// Identified reports that the kernel actually answered. A Peer with
+	// Identified false carries no identity at all — its PID of 0 is an
+	// absence, not a process — and anything comparing pids must say so
+	// rather than letting 0 match or fail on its own.
+	Identified bool
 }
 
 // Authenticated reports whether the connection presented a valid token.
 func (p *Peer) Authenticated() bool { return p.Auth != AuthNone }
 
-// peerCred reads SO_PEERCRED from a unix connection.
-func peerCred(c net.Conn) (*Peer, error) {
-	uc, ok := c.(*net.UnixConn)
-	if !ok {
-		return nil, fmt.Errorf("not a unix connection")
-	}
-	raw, err := uc.SyscallConn()
-	if err != nil {
-		return nil, err
-	}
-	var cred *syscall.Ucred
-	var credErr error
-	if err := raw.Control(func(fd uintptr) {
-		cred, credErr = syscall.GetsockoptUcred(int(fd), syscall.SOL_SOCKET, syscall.SO_PEERCRED)
-	}); err != nil {
-		return nil, err
-	}
-	if credErr != nil {
-		return nil, credErr
-	}
-	p := &Peer{PID: cred.Pid, UID: cred.Uid, GID: cred.Gid}
-	if ps, err := ProcStart(int(cred.Pid)); err == nil {
-		p.ProcStart = ps
-	}
-	return p, nil
-}
+// ErrPeerCredsUnavailable is returned by peerCred where the operating system
+// exposes no way to ask the kernel who is on the other end of a socket.
+//
+// It is a distinct error rather than a zero-valued Peer because the two mean
+// opposite things. A Peer whose PID is 0 reads as an identity; this says no
+// identity was established, so a caller enforcing anything on the strength of
+// one has to decide what to do rather than carry on holding nothing.
+var ErrPeerCredsUnavailable = errors.New("peer credentials are not available on this platform")

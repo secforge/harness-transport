@@ -327,3 +327,17 @@ func TestClearEnvForTestingCoversEveryBackend(t *testing.T) {
 		t.Error("restore did not put the environment back")
 	}
 }
+
+// A peer the kernel will not identify carries no identity, and the zero
+// value of a pid is 0 — which compares equal to nothing useful and unequal
+// to everything real. Identified is what tells the two apart.
+func TestAnUnidentifiedPeerIsNotAPidOfZero(t *testing.T) {
+	var absent udsmsg.Peer
+	if absent.Identified {
+		t.Error("the zero value must not claim to be identified")
+	}
+	real := udsmsg.Peer{PID: 4242, Identified: true}
+	if !real.Identified {
+		t.Error("a peer the kernel answered for should say so")
+	}
+}

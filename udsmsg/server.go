@@ -60,6 +60,12 @@ type Config struct {
 	// PeerToken and ChildToken are the accepted tokens. Generated if empty.
 	PeerToken  string
 	ChildToken string
+	// AllowUnidentifiedPeers accepts connections whose credentials the
+	// kernel will not report — which is every connection on a platform
+	// without SO_PEERCRED or LOCAL_PEERCRED. Off by default: identity here
+	// is a pid and a start time, so an unidentified peer cannot be held to
+	// anything a caller might be checking.
+	AllowUnidentifiedPeers bool
 	// PublishKey writes the key file so peers can discover PeerToken.
 	PublishKey bool
 	// AutoStatus answers every accepted user frame that carries a reply
@@ -270,11 +276,22 @@ func (s *Server) handleConn(ctx context.Context, conn *net.UnixConn) {
 
 	peer, err := peerCred(conn)
 	if err != nil {
-		// Without credentials we cannot verify the peer; carry on with an
-		// empty identity rather than refusing, matching the reference
-		// implementation's tolerance.
+		// Identity in this protocol IS the kernel's answer — a pid and a
+		// start time — so a connection we cannot identify is one we cannot
+		// hold to anything. Carrying on with an empty Peer would hand every
+		// caller a PID of 0 that reads like a process, which on a platform
+		// with no such call would be every connection, silently.
+		//
+		// So it is refused unless the caller has said otherwise. That is a
+		// decision about what an absent identity means, and it belongs to
+		// whoever is enforcing something with it rather than to this file.
+		if !s.cfg.AllowUnidentifiedPeers {
+			s.report(fmt.Errorf("refusing a connection whose peer could not be identified "+
+				"(set AllowUnidentifiedPeers to accept these): %w", err))
+			return
+		}
 		peer = &Peer{}
-		s.report(fmt.Errorf("read peer credentials: %w", err))
+		s.report(fmt.Errorf("accepting an unidentified peer: %w", err))
 	}
 	peer.Addr = s.path
 	peer.SelfSent = int(peer.PID) == os.Getpid()

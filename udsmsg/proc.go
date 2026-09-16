@@ -2,20 +2,9 @@ package udsmsg
 
 import (
 	"fmt"
-	"io/fs"
 	"os"
 	"strings"
-	"syscall"
 )
-
-// ownerUID extracts the owning uid from a FileInfo.
-func ownerUID(fi fs.FileInfo) (uint32, error) {
-	st, ok := fi.Sys().(*syscall.Stat_t)
-	if !ok {
-		return 0, fmt.Errorf("cannot read ownership of %s on this platform", fi.Name())
-	}
-	return st.Uid, nil
-}
 
 // ProcStart reads field 22 of /proc/<pid>/stat, the process start time in
 // clock ticks since boot. Together with the pid it identifies a process

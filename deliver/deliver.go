@@ -192,7 +192,8 @@ type Deliverer interface {
 //
 //	route                                  observed
 //	udsmsg push into a Claude Code session  1,000,019 bytes intact
-//	MCP pull (hub_wait) into a Codex one    cut at roughly 1,200 characters
+//	MCP pull (hub_wait) into a Codex one    cut at ~1,200 chars once;
+//	                                       2,620 bytes intact later
 //
 // The first is this constant, and it is a measurement: a numbered-checkpoint
 // ladder with sentinels and a nonce, delivered to live Claude Code 2.1.272
@@ -200,12 +201,15 @@ type Deliverer interface {
 // for gaps below it — 1, 4, 16, 32, 64, 128, 256 and 512 KB and 1,000,019
 // bytes, every rung intact, no cut at any size (2026-09-15).
 //
-// The second is NOT a measurement and must not be treated as one. It is a
-// single observation of one message arriving cut, confirmed as a real cut
-// rather than a display artefact only because a second client received the
-// same message whole over the other route. Nobody has run a ladder on that
-// path. "Roughly 1,200" is a symptom with a rough size, and the true figure
-// could be anywhere below it.
+// The second is NOT a measurement and must not be treated as one. It is two
+// single observations that contradict each other on the same route: one
+// message arrived cut at roughly 1,200 characters — confirmed a real cut
+// rather than a display artefact, because another client received that same
+// message whole over the other route — and a later 2,620-byte payload
+// arrived intact, checkpoints and end marker complete. So the cut is not a
+// fixed size limit on that path. The working hypothesis is that it depends
+// on a delivery carrying more than one message rather than on the size of
+// any one of them; the paired test that would settle it has not been run.
 //
 // The two differ by three orders of magnitude, which is the entire reason
 // this comment names routes at all. Recording two figures without saying

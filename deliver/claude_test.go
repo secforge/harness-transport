@@ -46,7 +46,7 @@ func (p *parentSession) received(t *testing.T) *udsmsg.Frame {
 
 func TestDeliverReachesTheParentSession(t *testing.T) {
 	p := startParent(t)
-	d := newClaude(p.srv.Path(), "test-token", "test-client")
+	d := newClaude(p.srv.Path(), "test-token", "test-client", "")
 
 	r, err := d.Deliver(context.Background(), Delivery{Cursor: "c-99", Body: "a relayed message"})
 	if err != nil {
@@ -74,7 +74,7 @@ func TestDeliverReachesTheParentSession(t *testing.T) {
 // never claim more than it observed.
 func TestClaudeNeverClaimsArrival(t *testing.T) {
 	p := startParent(t)
-	d := newClaude(p.srv.Path(), "test-token", "test-client")
+	d := newClaude(p.srv.Path(), "test-token", "test-client", "")
 
 	r, err := d.Deliver(context.Background(), Delivery{Cursor: "c", Body: "x"})
 	if err != nil {
@@ -102,7 +102,7 @@ func TestClaudeNeverClaimsArrival(t *testing.T) {
 // to avoid is content that arrives silently incomplete.
 func TestOversizeIsRefusedNotTruncated(t *testing.T) {
 	p := startParent(t)
-	d := newClaude(p.srv.Path(), "test-token", "test-client")
+	d := newClaude(p.srv.Path(), "test-token", "test-client", "")
 	max, _ := d.MaxIntactBytes()
 
 	r, err := d.Deliver(context.Background(), Delivery{Cursor: "c", Body: strings.Repeat("x", max+1)})
@@ -126,7 +126,7 @@ func TestOversizeIsRefusedNotTruncated(t *testing.T) {
 // size, not a number that fails just below itself.
 func TestLargeMessageArrivesIntact(t *testing.T) {
 	p := startParent(t)
-	d := newClaude(p.srv.Path(), "test-token", "test-client")
+	d := newClaude(p.srv.Path(), "test-token", "test-client", "")
 
 	body := "BEGIN " + strings.Repeat("payload ", 8000) + " END"
 	if _, err := d.Deliver(context.Background(), Delivery{Cursor: "c", Body: body}); err != nil {
@@ -148,7 +148,7 @@ func TestUnreachableParentIsReportedAsCertainNonArrival(t *testing.T) {
 	path := p.srv.Path()
 	p.srv.Close()
 
-	d := newClaude(path, "", "test-client")
+	d := newClaude(path, "", "test-client", "")
 	ok, reason := d.Available()
 	if ok {
 		t.Fatal("a closed parent inbox should not report as available")
@@ -164,7 +164,7 @@ func TestUnreachableParentIsReportedAsCertainNonArrival(t *testing.T) {
 // Without an inherited socket there is no parent, and the package must not go
 // looking for one.
 func TestNoInheritedSocketMeansNoParent(t *testing.T) {
-	d := newClaude("", "", "test-client")
+	d := newClaude("", "", "test-client", "")
 	ok, reason := d.Available()
 	if ok {
 		t.Fatal("no socket means no parent")
@@ -177,7 +177,7 @@ func TestNoInheritedSocketMeansNoParent(t *testing.T) {
 // With the token inherited, the session is reachable and says so plainly.
 func TestAnInheritedTokenMakesTheSessionReachable(t *testing.T) {
 	p := startParent(t)
-	ok, reason := newClaude(p.srv.Path(), "cafebabe", "test-client").Available()
+	ok, reason := newClaude(p.srv.Path(), "cafebabe", "test-client", "").Available()
 	if !ok || !strings.Contains(reason, "reachable") {
 		t.Errorf("with a child token: ok=%v reason=%q", ok, reason)
 	}
@@ -189,7 +189,7 @@ func TestAnInheritedTokenMakesTheSessionReachable(t *testing.T) {
 // instead of remote and silent.
 func TestNoTokenMeansNoDelivery(t *testing.T) {
 	p := startParent(t)
-	d := newClaude(p.srv.Path(), "", "test-client")
+	d := newClaude(p.srv.Path(), "", "test-client", "")
 
 	ok, reason := d.Available()
 	if ok {
@@ -205,5 +205,43 @@ func TestNoTokenMeansNoDelivery(t *testing.T) {
 	case f := <-p.frames:
 		t.Errorf("nothing should have been sent, got %q", f.Text())
 	case <-time.After(250 * time.Millisecond):
+	}
+}
+
+// A reply address makes a delivery answerable with the harness's ordinary
+// reply instead of a separate tool. It has to reach both places: the frame,
+// where delivery status goes, and the envelope, which is what the model sees.
+func TestAReplyAddressReachesFrameAndEnvelope(t *testing.T) {
+	p := startParent(t)
+	const inbox = "uds:/run/user/0/cc-socks/4242-a1b2c3d4.sock"
+
+	if _, err := newClaude(p.srv.Path(), "test-token", "test-client", inbox).
+		Deliver(context.Background(), Delivery{Cursor: "c", Body: "answerable"}); err != nil {
+		t.Fatalf("Deliver: %v", err)
+	}
+	f := p.received(t)
+	if f.From != inbox {
+		t.Errorf("frame from = %q, want the reply address — delivery status goes there", f.From)
+	}
+	cs, _, wrapped := udsmsg.Unwrap(f.Text())
+	if !wrapped || cs.From != inbox {
+		t.Errorf("envelope from = %q, want the reply address — this is what the model replies to", cs.From)
+	}
+}
+
+// The default stays one-way: a caller that names no inbox has nothing to be
+// answered on, and an envelope claiming otherwise would point nowhere.
+func TestWithoutAReplyAddressTheDeliveryIsOneWay(t *testing.T) {
+	p := startParent(t)
+	if _, err := newClaude(p.srv.Path(), "test-token", "test-client", "").
+		Deliver(context.Background(), Delivery{Cursor: "c", Body: "one-way"}); err != nil {
+		t.Fatalf("Deliver: %v", err)
+	}
+	f := p.received(t)
+	if f.From != "" {
+		t.Errorf("frame from = %q, want empty", f.From)
+	}
+	if cs, _, _ := udsmsg.Unwrap(f.Text()); cs.From != "" {
+		t.Errorf("envelope from = %q, want empty", cs.From)
 	}
 }

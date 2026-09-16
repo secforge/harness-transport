@@ -250,7 +250,10 @@ const DemonstratedIntactBytes = 1_000_000
 // Option configures a Deliverer.
 type Option func(*options)
 
-type options struct{ senderName string }
+type options struct {
+	senderName   string
+	replyAddress string
+}
 
 // WithSenderName sets how this process is named to the harness: the attribution
 // on a delivered Claude message, and the client name Codex records in thread
@@ -261,6 +264,23 @@ type options struct{ senderName string }
 // binary and misleading under `go run`, where it is "main".
 func WithSenderName(name string) Option {
 	return func(o *options) { o.senderName = name }
+}
+
+// WithReplyAddress makes deliveries repliable, by naming an inbox of the
+// caller's own — "uds:<socket path>", as udsmsg.Server.Addr returns.
+//
+// Without it a delivery is one-way by construction: this package pushes into
+// its harness and there is nothing on this side to answer to. With it, the
+// address appears in the envelope the model sees, so a reply is the harness's
+// ordinary reply-to-the-sender rather than a different tool.
+//
+// The caller owns the inbox and therefore owns who may write to it. Identity
+// on that side is the kernel's answer, not the address: a reply arrives
+// authenticated as a peer, which proves only that it came from a session able
+// to read the inbox's key file — compare Peer.PID against the pid of the
+// harness socket to get parent-only.
+func WithReplyAddress(addr string) Option {
+	return func(o *options) { o.replyAddress = addr }
 }
 
 // Open returns a Deliverer for whichever harness launched this process.
@@ -277,7 +297,7 @@ func Open(opts ...Option) Deliverer {
 		o.senderName = defaultSenderName()
 	}
 	if sock := os.Getenv(EnvClaudeSocket); sock != "" {
-		return newClaude(sock, os.Getenv(EnvClaudeToken), o.senderName)
+		return newClaude(sock, os.Getenv(EnvClaudeToken), o.senderName, o.replyAddress)
 	}
 	c := newCodex(o.senderName)
 	// A shell-tool child of a Codex harness is told its thread at exec, the

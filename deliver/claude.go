@@ -18,16 +18,20 @@ import (
 type claudeBackend struct {
 	socket string
 	token  string
+	// replyTo is an inbox of the caller's own, named in the envelope so the
+	// model can answer with its ordinary reply rather than another tool.
+	// Empty means one-way, which is the default.
+	replyTo string
 
 	mu   sync.Mutex
 	name string
 }
 
-func newClaude(socket, token, name string) Deliverer {
+func newClaude(socket, token, name, replyTo string) Deliverer {
 	if name == "" {
 		name = defaultSenderName()
 	}
-	return &claudeBackend{socket: socket, token: token, name: name}
+	return &claudeBackend{socket: socket, token: token, name: name, replyTo: replyTo}
 }
 
 // defaultSenderName identifies this process in the delivered message. It is
@@ -82,7 +86,8 @@ func (c *claudeBackend) Fits(d Delivery) (bool, int, error) {
 	c.mu.Unlock()
 	size, fits, err := udsmsg.EncodedUserSize(udsmsg.User{
 		Text:        compose(d),
-		Attribution: &udsmsg.CrossSession{Name: name, Mode: udsmsg.ModePrompting},
+		From:        c.replyTo,
+		Attribution: &udsmsg.CrossSession{From: c.replyTo, Name: name, Mode: udsmsg.ModePrompting},
 	})
 	return fits, size, err
 }
@@ -150,11 +155,18 @@ func (c *claudeBackend) Deliver(ctx context.Context, d Delivery) (Receipt, error
 	}
 	defer client.Close()
 
+	// The address is carried twice on purpose: on the frame, where the
+	// harness sends delivery status, and inside the envelope, which is what
+	// the model sees and replies to. Empty in both places leaves the
+	// delivery one-way, as it is by default.
 	msgID, err := client.SendUser(udsmsg.User{
 		Text: text,
-		// No reply address: this is a push into our own harness, and there is
-		// nothing here to answer to.
-		Attribution: &udsmsg.CrossSession{Name: name, Mode: udsmsg.ModePrompting},
+		From: c.replyTo,
+		Attribution: &udsmsg.CrossSession{
+			From: c.replyTo,
+			Name: name,
+			Mode: udsmsg.ModePrompting,
+		},
 	})
 	if err != nil {
 		return Receipt{SentBytes: len(text)}, fmt.Errorf("the message was not written to the harness session: %w", err)

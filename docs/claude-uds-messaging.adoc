@@ -161,7 +161,7 @@ The intent is that **who you are is not something you get to state**. A sender
 puts an address in `from`, but that is a claim about where replies should go,
 not evidence of identity. The receiver takes identity from the kernel instead —
 the credentials attached to the connection itself
-(`SO_PEERCRED`footnote:[`SO_PEERCRED` is a socket option on unix domain sockets:
+(``SO_PEERCRED``footnote:peercred[A socket option on unix domain sockets:
 reading it returns the pid, uid and gid of the process on the other end, as
 recorded by the kernel when the connection was made. The values come from the
 kernel rather than from anything sent over the socket, so a peer cannot choose
@@ -336,7 +336,7 @@ waits forever. Verified by observation: a `--wait status` send to a live
   recipient user declined your message; it was not delivered…"_.
 
 | `peer_idle_notice`
-| [.red]#[code]# `state` ∈ `idle` (turn finished, nothing queued; debounced and held while parked items exist), `exited` (shutdown — downgraded to `idle` if it exits while genuinely idle), `unavailable` (subscription cannot be served; retried on transient failures). `finished_at` when a turn-end timestamp exists. `detail` **only** when the subscriber's claimed reply address canonicalises to the socket registered for its `SO_PEERCRED` pid in the session registry.
+| [.red]#[code]# `state` ∈ `idle` (turn finished, nothing queued; debounced and held while parked items exist), `exited` (shutdown — downgraded to `idle` if it exits while genuinely idle), `unavailable` (subscription cannot be served; retried on transient failures). `finished_at` when a turn-end timestamp exists. `detail` **only** when the subscriber's claimed reply address canonicalises to the socket registered for its ``SO_PEERCRED``footnote:peercred[] pid in the session registry.
 
 |===
 
@@ -364,8 +364,8 @@ that has been recycled. [.red]#[code]#
   dropped and the connection destroyed.
 
 | Lines
-| Split on `\n`. Each is `JSON.parse`d; a failure logs _"Failed to parse JSON
-  line"_ and skips **that line only**. A line over **1 MiB** (`jat=1048576`) drops the
+| Split on `\n`. Each is ``JSON.parse``d; a failure logs _"Failed to parse JSON
+  line"_ and skips **that line only**. A line over **1 MiB** (1,048,576 bytes) drops the
   whole connection.
 
 | Validation

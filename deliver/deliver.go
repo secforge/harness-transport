@@ -207,9 +207,12 @@ type Deliverer interface {
 // rather than a display artefact, because another client received that same
 // message whole over the other route — and a later 2,620-byte payload
 // arrived intact, checkpoints and end marker complete. So the cut is not a
-// fixed size limit on that path. The working hypothesis is that it depends
-// on a delivery carrying more than one message rather than on the size of
-// any one of them; the paired test that would settle it has not been run.
+// fixed size limit on that path. The working hypothesis was that it depends
+// on a delivery carrying more than one message rather than on the size of any
+// one of them — tested 2026-09-16 and NOT reproduced: one hub_wait result
+// carrying three events, two of them ~1.2 KB checkpoint payloads, arrived
+// complete with every marker intact. So neither size alone nor batching alone
+// explains the original cut, and it remains unexplained.
 //
 // The two differ by three orders of magnitude, which is the entire reason
 // this comment names routes at all. Recording two figures without saying

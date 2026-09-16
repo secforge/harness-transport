@@ -72,6 +72,65 @@ func NewSessionEntry(socketPath, name string) (*SessionEntry, error) {
 	return e, nil
 }
 
+// NewMCPEntry builds a registry entry for an MCP server's own inbox.
+//
+// Registering is what lets the harness identify a reply target, and an
+// unidentified target is what gets a reply held for approval. But an MCP
+// server is not a session, so the entry must not read like one: the name
+// carries BOTH the harness session it belongs to and the MCP server it is,
+// and the kind says what it actually is rather than borrowing "interactive".
+//
+// harnessName is the parent session's own name — ParentSessionName reads it
+// from the registry — and mcpName is the server's configured name, the one
+// that appears as mcp:<name> in an attribution.
+func NewMCPEntry(socketPath, harnessName, mcpName string) (*SessionEntry, error) {
+	e, err := NewSessionEntry(socketPath, mcpEntryName(harnessName, mcpName))
+	if err != nil {
+		return nil, err
+	}
+	e.Kind = "mcp"
+	e.Entrypoint = "mcp"
+	return e, nil
+}
+
+// mcpEntryName composes the display name: the harness first, since that is
+// the thing a reader is placing it against, then the server.
+func mcpEntryName(harnessName, mcpName string) string {
+	switch {
+	case harnessName == "" && mcpName == "":
+		return "mcp"
+	case harnessName == "":
+		return "mcp:" + mcpName
+	case mcpName == "":
+		return harnessName + " · mcp"
+	}
+	return harnessName + " · mcp:" + mcpName
+}
+
+// ParentSessionName returns the name of the session that spawned this
+// process, read from its registry entry. Empty when there is no parent, no
+// entry, or the entry carries no name — all of which are ordinary, so a
+// caller should compose something usable rather than treating it as failure.
+func ParentSessionName() string {
+	sock := os.Getenv(EnvMessagingSocket)
+	if sock == "" {
+		return ""
+	}
+	pid, ok := PIDFromSocketName(filepath.Base(sock))
+	if !ok {
+		return ""
+	}
+	b, err := os.ReadFile(sessionEntryPath(pid))
+	if err != nil {
+		return ""
+	}
+	var e SessionEntry
+	if err := json.Unmarshal(b, &e); err != nil {
+		return ""
+	}
+	return e.Name
+}
+
 // sessionEntryPath is the registry file for a pid.
 func sessionEntryPath(pid int) string {
 	return filepath.Join(SessionsDir(), fmt.Sprintf("%d.json", pid))

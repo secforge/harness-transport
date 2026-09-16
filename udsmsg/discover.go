@@ -217,17 +217,36 @@ func ResolveTarget(pid int) (Target, error) {
 	if k != nil {
 		t.Token, t.ProcStart = k.PeerToken, k.ProcStart
 	}
+	// Reaching our OWN parent is not a peer connection, and should not be
+	// made into one. The inherited child token identifies us as that
+	// session's child, which skips cross-session handling entirely — no
+	// permission-mode parity, no holding for approval, no exposure to a
+	// session's refuse-cross-session-messages setting. The peer token from
+	// the key file would work and would place us in exactly that machinery,
+	// for a message from a process the session started itself.
+	if env := os.Getenv(EnvMessagingSocket); env != "" && env == path {
+		if child := os.Getenv(EnvMessagingToken); child != "" {
+			t.Token = child
+		}
+	}
 	return t, nil
 }
+
+// Environment a session exports to everything it spawns. The names are the
+// harness's own and are kept verbatim; they are interface, not our choice.
+const (
+	EnvMessagingSocket = "CLAUDE_CODE_MESSAGING_SOCKET"
+	EnvMessagingToken  = "CLAUDE_CODE_MESSAGING_TOKEN"
+)
 
 // TargetFromEnv resolves the session that spawned this process, using
 // CLAUDE_CODE_MESSAGING_SOCKET and the inherited child token.
 func TargetFromEnv() (Target, bool) {
-	path := os.Getenv("CLAUDE_CODE_MESSAGING_SOCKET")
+	path := os.Getenv(EnvMessagingSocket)
 	if path == "" {
 		return Target{}, false
 	}
-	t := Target{SocketPath: path, Token: os.Getenv("CLAUDE_CODE_MESSAGING_TOKEN")}
+	t := Target{SocketPath: path, Token: os.Getenv(EnvMessagingToken)}
 	if pid, ok := PIDFromSocketName(filepath.Base(path)); ok {
 		t.PID = pid
 	}

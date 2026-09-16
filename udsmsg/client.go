@@ -103,7 +103,7 @@ func (c *Client) Send(f *Frame) error {
 // on this socket — a status, an idle notice or a reply all go to the address
 // in `from`, on a connection of their own — so a read here blocks forever
 // while the receiver is content. What a rejecting receiver does instead is
-// destroy the connection: authRequired with a missing or wrong token drops
+// destroy the connection: a receiver that requires authentication, given a missing or wrong token, drops
 // every line and closes, as does a session_id mismatch or an oversize line,
 // and none of them says why.
 //

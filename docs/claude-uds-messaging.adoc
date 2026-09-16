@@ -157,20 +157,29 @@ surface, not as an authenticated channel.
 
 === Peer credentials
 
-Independently of the token, the server reads the peer's credentials from the
-socket (`SO_PEERCRED`) and derives:
+The intent is that **who you are is not something you get to state**. A sender
+puts an address in `from`, but that is a claim about where replies should go,
+not evidence of identity. The receiver takes identity from the kernel instead —
+the credentials attached to the connection itself (`SO_PEERCRED`), which no
+sender can forge — and treats the claimed address as something to be
+corroborated against it, using the session registry as the record of which
+socket belongs to which process. A start time is carried alongside the pid so
+that a pid which has since been recycled cannot inherit the identity of the
+process that held it.
 
-* the connecting process's pid
-* its start time, to defeat pid reuse
-* the uids permitted for the socket directory
+The consequence for a client is the useful part. You cannot impersonate another
+session by writing its address in `from`; the mismatch is visible to the
+receiver whatever you claim. Nor is a mismatch fatal — the message is still
+delivered. What you lose is the trusted extras: information the receiver is only
+willing to hand to a peer it has positively identified, such as the `detail`
+field on an idle notice. Consistency between the socket you connect from and the
+address you claim is therefore a requirement for the full protocol, not for
+basic delivery. [.red]#[code]# — only the effect is observable from outside.
 
-[.red]#[code]# — the derivation is from the binary. What a sender
-can confirm from outside is only the *effect*: `detail` is withheld when the
-claimed address does not match the pid's registry entry.
-
-A message whose `session_id` does not match the receiving session is dropped
-(_"Dropping … message: session_id mismatch (got X, expected Y)"_), and a message
-that appears to originate from the receiver itself is marked as self-sent. [.red]#[code]#
+Two related filters express the same idea at the message level: a message naming
+a `session_id` other than the receiver's is not for it and is dropped, and a
+message that appears to come from the receiver itself is recognised as its own
+rather than treated as a peer's. [.red]#[code]#
 
 == Wire format
 
@@ -387,9 +396,38 @@ random per-session value.
 A token is therefore stable for a session's lifetime, changes on restart, and
 cannot be computed by a third party. The chain keeps the last 32 entries; a
 frame whose chain already contains the receiver's own token is dropped as a
-relay loop. A reply target is only accepted if it resolves inside
-one of the standard socket directories, unless the sender set the
-`reply_across_default_dirs` capability. [.red]#[code]#
+relay loop. [.red]#[code]#
+
+==== Which reply targets are accepted
+
+A claimed reply address is validated before anything is sent to it; a rejected
+one is logged as _"reply address unshaped or outside our socket namespace"_ and
+the status frame is simply not sent. [.red]#[code]# The order is:
+
+. On Windows, the target must have the named-pipe shape `(LOCAL\)?cc-msg-<32 hex>`.
+. If the target is in the **same directory as the receiver's own socket**, it is
+  accepted for ending in `.sock` — no further checks.
+. Otherwise a verified peer pid is required, the file name must match
+  `^(\d+(-[0-9a-f]{8})?|[0-9a-f]{1,16})\.sock$`, and the directory must be one of
+  `/tmp/cc-socks[-<uid>]`, `/private/tmp/cc-socks[-<uid>]`,
+  `/run/user/<uid>/cc-socks` or the Termux equivalent. Where that path carries a
+  `<uid>`, it must match one the receiver accepts (below). A directory with no
+  uid in its name skips that comparison.
+
+A sender advertising the `reply_across_default_dirs` capability gets the third
+rule applied directly, rather than only as a fallback. [.red]#[code]#
+
+The accepted uids are computed once when the inbox binds: the session's own uid,
+plus the uid the **host** sees it as — its own uid mapped through
+`/proc/self/uid_map` — when that differs. The second is absent outside a user
+namespace, or when the mapping is missing or ambiguous. So a session whose
+inside-root maps to host uid 1000 accepts reply addresses under both
+`/run/user/0/cc-socks` and `/run/user/1000/cc-socks`. This is a check on the uid
+*written into the path*, not on who owns the directory. [.red]#[code]#
+
+TIP: A client whose inbox lives in the same directory as its peers — the normal
+case on Linux, `/run/user/<uid>/cc-socks/` — takes the second rule and never
+reaches any of this.
 
 [#_writing_a_client]
 == Writing a client

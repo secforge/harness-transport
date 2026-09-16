@@ -1,7 +1,9 @@
 package udsmsg
 
 import (
+	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"testing"
 )
@@ -124,5 +126,51 @@ func TestTargetFromEnv(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_MESSAGING_SOCKET", "")
 	if _, ok := TargetFromEnv(); ok {
 		t.Error("TargetFromEnv should report false without a socket path")
+	}
+}
+
+// Reaching our own parent should authenticate as its CHILD, not as a peer:
+// the child token skips cross-session handling, which a message from a
+// process the session started itself has no business going through.
+func TestOwnParentIsReachedWithTheChildToken(t *testing.T) {
+	// Bound at the canonical <pid>.sock, since that is the name
+	// ResolveTarget looks for — an allocated inbox carries a discriminator
+	// and is reached by path rather than by pid.
+	dir := SocketDirs()[0]
+	if CheckDir(dir) != nil {
+		t.Skipf("no usable socket directory at %s", dir)
+	}
+	srv, err := Listen(Config{
+		Path:       filepath.Join(dir, fmt.Sprintf("%d.sock", os.Getpid())),
+		PublishKey: true,
+	})
+	if err != nil {
+		t.Skipf("cannot bind an inbox here: %v", err)
+	}
+	defer srv.Close()
+
+	t.Setenv(EnvMessagingSocket, srv.Path())
+	t.Setenv(EnvMessagingToken, "the-inherited-child-token")
+
+	got, err := ResolveTarget(os.Getpid())
+	if err != nil {
+		t.Fatalf("ResolveTarget: %v", err)
+	}
+	if got.Token != "the-inherited-child-token" {
+		t.Errorf("token = %q; the inherited child token should win over the published peer token", got.Token)
+	}
+
+	// A different session is necessarily a peer, and the child token
+	// authenticates only to the parent — so it must not leak there.
+	t.Setenv(EnvMessagingSocket, "/run/user/0/cc-socks/999999.sock")
+	got, err = ResolveTarget(os.Getpid())
+	if err != nil {
+		t.Fatalf("ResolveTarget: %v", err)
+	}
+	if got.Token == "the-inherited-child-token" {
+		t.Error("the child token was used for a target that is not our parent")
+	}
+	if got.Token != srv.PeerToken() {
+		t.Errorf("token = %q, want the published peer token", got.Token)
 	}
 }

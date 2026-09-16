@@ -53,10 +53,10 @@ type Config struct {
 	// SessionID, when set, is enforced: a frame carrying a different
 	// session_id is dropped. A frame without one is always accepted.
 	SessionID string
-	// AuthRequired rejects every line from a connection that has not
+	// RequireAuth rejects every line from a connection that has not
 	// presented a valid token. The reference implementation leaves this off
 	// by default, accepting unauthenticated frames.
-	AuthRequired bool
+	RequireAuth bool
 	// PeerToken and ChildToken are the accepted tokens. Generated if empty.
 	PeerToken  string
 	ChildToken string
@@ -145,6 +145,19 @@ func Listen(cfg Config) (*Server, error) {
 
 // allocSocketPath picks the first usable standard directory and a socket name
 // that carries our pid plus a discriminator.
+// allocSocketPath places our inbox in a standard socket directory, and that
+// location is load-bearing rather than tidy.
+//
+// A receiver validates a claimed reply address before it will send anything
+// there. An address in the SAME DIRECTORY as the receiver's own socket is
+// accepted on the strength of ending in .sock and nothing else; an address
+// anywhere else has to clear a verified peer pid, a file-name pattern, one of
+// the standard directories, and a uid written into the path matching one the
+// receiver accepts. Rejection is silent — it logs on its side and simply does
+// not send the status frame.
+//
+// So moving this to a temp dir would not fail loudly, it would cost every
+// status frame with no error anywhere.
 func allocSocketPath() (string, error) {
 	var disc [4]byte
 	if _, err := rand.Read(disc[:]); err != nil {
@@ -330,7 +343,7 @@ func (s *Server) dispatch(ctx context.Context, peer *Peer, line []byte, isFirst 
 		case subtle.ConstantTimeCompare([]byte(f.Token), []byte(s.cfg.ChildToken)) == 1:
 			peer.Auth = AuthChild
 		default:
-			if s.cfg.AuthRequired {
+			if s.cfg.RequireAuth {
 				s.drop(ctx, peer, line, errors.New("invalid token; closing the connection"))
 				return connDestroy
 			}
@@ -339,7 +352,7 @@ func (s *Server) dispatch(ctx context.Context, peer *Peer, line []byte, isFirst 
 		return connContinue
 	}
 
-	if s.cfg.AuthRequired && !peer.Authenticated() {
+	if s.cfg.RequireAuth && !peer.Authenticated() {
 		s.drop(ctx, peer, line, errors.New("dropped a frame from a connection that did not authenticate; closing it"))
 		return connDestroy
 	}

@@ -173,7 +173,7 @@ func TestChildTokenIsAccepted(t *testing.T) {
 }
 
 func TestAuthOptionalAcceptsUnauthenticated(t *testing.T) {
-	srv, c := testServer(t, Config{AuthRequired: false})
+	srv, c := testServer(t, Config{RequireAuth: false})
 	cl, err := Dial(context.Background(), Target{SocketPath: srv.Path()}) // no token
 	if err != nil {
 		t.Fatal(err)
@@ -190,8 +190,8 @@ func TestAuthOptionalAcceptsUnauthenticated(t *testing.T) {
 	}
 }
 
-func TestAuthRequiredDropsUnauthenticated(t *testing.T) {
-	srv, c := testServer(t, Config{AuthRequired: true})
+func TestRequireAuthDropsUnauthenticated(t *testing.T) {
+	srv, c := testServer(t, Config{RequireAuth: true})
 	conn := raw(t, srv.Path(), []byte(`{"type":"user","message":{"role":"user","content":"x"}}`+"\n"))
 	defer conn.Close()
 
@@ -201,8 +201,8 @@ func TestAuthRequiredDropsUnauthenticated(t *testing.T) {
 	c.quiet(t, 200*time.Millisecond)
 }
 
-func TestAuthRequiredDestroysConnectionOnBadToken(t *testing.T) {
-	srv, c := testServer(t, Config{AuthRequired: true})
+func TestRequireAuthDestroysConnectionOnBadToken(t *testing.T) {
+	srv, c := testServer(t, Config{RequireAuth: true})
 	conn := raw(t, srv.Path(), []byte(
 		`{"type":"auth","token":"wrong"}`+"\n"+
 			`{"type":"user","message":{"role":"user","content":"x"}}`+"\n"))
@@ -216,7 +216,7 @@ func TestAuthRequiredDestroysConnectionOnBadToken(t *testing.T) {
 }
 
 func TestAuthFrameToleratesExtraFields(t *testing.T) {
-	srv, c := testServer(t, Config{AuthRequired: true, PeerToken: "tok"})
+	srv, c := testServer(t, Config{RequireAuth: true, PeerToken: "tok"})
 	conn := raw(t, srv.Path(), []byte(
 		`{"type":"auth","token":"tok","novel":true}`+"\n"+
 			`{"type":"user","message":{"role":"user","content":"x"}}`+"\n"))
@@ -315,7 +315,7 @@ func TestOversizeLineDropsConnection(t *testing.T) {
 	}
 }
 
-func TestFirstLineDeadlineClosesIdleConnection(t *testing.T) {
+func TestHandshakeDeadlineClosesIdleConnection(t *testing.T) {
 	srv, c := testServer(t, Config{FirstLineTimeout: 150 * time.Millisecond})
 	conn, err := net.Dial("unix", srv.Path())
 	if err != nil {

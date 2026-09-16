@@ -25,6 +25,19 @@ type Client struct {
 // A target whose published start time no longer matches the live process is
 // refused before a byte is written: the pid has been recycled, and the socket
 // now belongs to someone else.
+//
+// DIALLING WITHOUT A TOKEN IS NOT PORTABLE, and fails invisibly where it
+// fails. A receiver with authRequired drops every line and destroys the
+// connection, logging only to itself: no error frame, no reason code, so the
+// caller sees an abrupt close indistinguishable from a crash or a timeout.
+// That is off on Linux and macOS, where an unauthenticated connection is
+// accepted, and ON BY DEFAULT ON WINDOWS. So the same tokenless code works in
+// development and dies silently in the one place it is hardest to debug.
+//
+// Presenting a wrong token fails identically, so always sending the frame
+// would not help — what helps is knowing. Authenticated reports whether a
+// token was presented, and a caller whose connection closes unexpectedly
+// should say so rather than leaving the reader to guess.
 func Dial(ctx context.Context, t Target) (*Client, error) {
 	if t.PID != 0 && t.ProcStart != "" && !Alive(t.PID, t.ProcStart) {
 		return nil, fmt.Errorf("pid %d is not the process that published %s", t.PID, t.SocketPath)
@@ -58,6 +71,11 @@ func DialPID(ctx context.Context, pid int) (*Client, error) {
 
 // Target returns the destination this client is connected to.
 func (c *Client) Target() Target { return c.target }
+
+// Authenticated reports whether this connection presented a token. False
+// means the receiver accepted it unauthenticated — or will destroy it without
+// saying why, on a platform where auth is required. See Dial.
+func (c *Client) Authenticated() bool { return c.target.Token != "" }
 
 // Send writes one frame as a single line.
 func (c *Client) Send(f *Frame) error {

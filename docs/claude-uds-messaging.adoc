@@ -63,37 +63,23 @@ both accepted and free of pid collisions across pid namespaces.
 | `CLAUDE_CODE_MESSAGING_TOKEN`
 | The **child token** (see <<_authentication>>). Exported to child processes so
   hooks and spawned tools can talk back without reading any file.
-
-| `--messaging-socket-path`
-| Bind an explicit path instead of the automatic one. When given explicitly, a
-  failure to publish the auth key is fatal rather than degraded. [.red]#[code]#
 |===
 
 == Authentication
 
-Each session generates **two independent 128-bit tokens** at startup [.red]#[code]# — the
-key file and the environment variable are observable, their derivation is not:
-
-[source,javascript]
-----
-{ peerToken:  randomBytes(16).toString("hex"),   // 32 hex chars, for other sessions
-  childToken: randomBytes(16).toString("hex") }  // 32 hex chars, for spawned children
-----
-
-They are distributed differently, and that difference is the whole access model:
+A session has two tokens, each 32 hex chars, and either one authenticates:
 
 [cols="1,4"]
 |===
-| Token | Distribution
+| Token | Where to get it
 
 | `childToken`
-| Placed in `CLAUDE_CODE_MESSAGING_TOKEN` in the environment. Anything the
-  session spawns inherits it; nothing else can read it.
+| `CLAUDE_CODE_MESSAGING_TOKEN` in the environment — inherited by anything the
+  session spawns.
 
 | `peerToken`
-| Written to a key file under `~/.claude/sessions/` (mode `0700` dir, `0600`
-  file). Any process that can read that directory — i.e. the same uid — can
-  authenticate to any session of that user.
+| The key file under `~/.claude/sessions/` (mode `0700` dir, `0600` file), so
+  readable by the same uid.
 |===
 
 === The key file
@@ -105,9 +91,7 @@ They are distributed differently, and that difference is the whole access model:
 
 The 64-hex component is `sha256` of the **canonical socket path** (on Windows,
 of `\\.\pipe\<name>`), which binds a key file to one specific socket — verified by
-recomputing the hash against every sampled file. Writes go through
-`<name>.key.tmp.<hex>` and are renamed into place, so a reader never sees a
-partial file; maximum accepted size is 4096 bytes. [.red]#[code]#
+recomputing the hash against every sampled file.
 
 Content:
 
@@ -116,7 +100,7 @@ Content:
 {
   "peerToken": "2f6c…",                     // 32 hex chars
   "procStart": "1162506",                   // /proc/<pid>/stat field 22
-  "pidDomain": "linux:<machine-id>:pid:[4026532231]"   // namespace-qualified pid space
+  "pidDomain": "linux:<machine-id>:<target of /proc/self/ns/pid>"   // namespace-qualified pid space
 }
 ----
 
@@ -127,28 +111,22 @@ code [.red]#[code]#, not something a reader of the file can see.
 
 === The auth line
 
-The first line of a connection may be an auth frame [.red]#[code]# — with auth optional
-on this host no session ever sent one, so the shape comes from the binary and
-from the recipe it logs:
+The first line of a connection may be an auth frame. With auth optional on this
+host no session ever sent one, so the shape comes not from the wire but from the
+recipe the session itself logs when its inbox binds — which also states whether
+auth is required or optional there:
 
 [source,json]
 ----
 {"type":"auth","token":"<32 hex chars>"}
 ----
 
-The guard is deliberately loose about shape and strict about the token:
-
-[source,javascript]
-----
-QPr(e) = typeof e === "object" && e !== null && "type" in e && e.type === "auth"
-ZPr(tok, keys) = eI(tok, keys.peerToken)  ? "peer"
-               : eI(tok, keys.childToken) ? "child"
-               : undefined
-----
-
-Extra fields are tolerated; the token decides the connection's identity —
-`peer` or `child` — and both are accepted. [.red]#[code]# Both function bodies above are
-read from the binary.
+The guard is deliberately loose about shape and strict about the token: a line
+counts as an auth frame if it is an object whose `type` is `auth`, so extra
+fields are tolerated. The token then decides the connection's identity — it is
+compared against both of the session's tokens, yielding `peer` or `child`, and
+both are accepted; anything else leaves the connection unauthenticated.
+[.red]#[code]#
 
 [cols="2,4"]
 |===
@@ -157,12 +135,16 @@ read from the binary.
 | Valid token
 | Connection authenticated; subsequent lines are processed.
 
-| `authRequired` is set and the token is absent or wrong
-| Every line is dropped and the connection destroyed:
-  _"Dropped … from a connection that did not authenticate; closing it"_. [.red]#[code]#
-  Never observed: no session on the test host ran with the flag set.
+| Auth is required and the token is absent or wrong
+| Every line is dropped and the connection destroyed. The receiver logs a
+  warning to itself — _"Dropped … from a connection that did not authenticate;
+  closing it"_ — and sends nothing back, so the client sees only an abrupt
+  close with no reason.
+  Not seen here — auth is optional on Linux and there is no setting to turn it
+  on — but it is the default on Windows, so a Windows host reaches this on any
+  unauthenticated connection.
 
-| `authRequired` is not set (default)
+| Auth is not required (the default everywhere but Windows)
 | Unauthenticated lines are **accepted**. This is the state when the key file
   could not be published: _"peers will send unauthenticated (accepted: auth is
   optional on this platform)"_.
@@ -178,11 +160,11 @@ surface, not as an authenticated channel.
 Independently of the token, the server reads the peer's credentials from the
 socket (`SO_PEERCRED`) and derives:
 
-* `verifiedPeerPid` — the connecting process's pid
-* `verifiedPeerProcStart` — its start time, to defeat pid reuse
-* `ownerUids` — the uids permitted for the socket directory
+* the connecting process's pid
+* its start time, to defeat pid reuse
+* the uids permitted for the socket directory
 
-[.red]#[code]# — the names and the derivation are from the binary. What a sender
+[.red]#[code]# — the derivation is from the binary. What a sender
 can confirm from outside is only the *effect*: `detail` is withheld when the
 claimed address does not match the pid's registry entry.
 
@@ -195,7 +177,7 @@ that appears to originate from the receiver itself is marked `selfSent`. [.red]#
 * One JSON object per line, `\n`-terminated. The trailing buffer is parsed on
   close, so a final line without a newline still arrives.
 * A connection that sends **no complete line within 30 s**
-  (`firstLineDeadlineMs`) is closed. [.red]#[code]# The exact figure is from the binary.
+  is closed. [.red]#[code]# The exact figure is from the binary.
 * A line exceeding **1 MiB** (`jat=1048576`) is dropped along with the connection. [.red]#[code]#
   Never reached in testing — the largest measured line was 1,014,898 bytes, just
   under it, so the cap is a read constant, not an observed boundary.
@@ -222,9 +204,9 @@ Injects a prompt into the receiving session's queue.
 | Field | Meaning
 
 | `message.content` | The prompt text. Missing or non-string content is ignored.
-| `msg_id` | Sender-assigned id, **must be an RFC-4122 UUID** — gated by `yOe` in two places. [.red]#[code]# On a `user` frame a non-UUID is *silently omitted* from the origin record, so every later `peer_message_status` arrives without `orig_msg_id` and correlation fails; on `notify_when_idle` a non-UUID makes the whole frame invalid and the subscription is dropped. 32 hex is **not** accepted (that pattern is the Windows pipe name).
+| `msg_id` | Sender-assigned id, **must be an RFC-4122 UUID** — checked in two places. [.red]#[code]# On a `user` frame a non-UUID is *silently omitted* from the origin record, so every later `peer_message_status` arrives without `orig_msg_id` and correlation fails; on `notify_when_idle` a non-UUID makes the whole frame invalid and the subscription is dropped. 32 hex is **not** accepted (that pattern is the Windows pipe name).
 | `msgV` | Envelope version; a session sends `1` (observed). That the receive path never reads it — and so that any value is accepted — is [.red]#[code]#.
-| `priority` | Queue placement: `"now"`, `"next"` or `"later"` — `(x==="now" or "next" or "later") ? x : "next"`, so absent or unknown silently becomes `"next"`; never a drop. A session sends `"next"` (observed); the rest of this row is [.red]#[code]#. `"now"` also changes *how* the frame is handled, not just where it queues: `type==="user" && priority==="now" && file_attachments===undefined` is dispatched immediately instead of being appended to `processingChain`, the same bypass control frames get (except `notify_when_idle`). So a `"now"` frame can be processed concurrently with one already in flight.
+| `priority` | Queue placement: `"now"`, `"next"` or `"later"`; absent or unknown silently becomes `"next"`, never a drop. A session sends `"next"` (observed); the rest of this row is [.red]#[code]#. `"now"` also changes *how* the frame is handled, not just where it queues: a `user` frame with `"now"` and no attachments is dispatched immediately instead of being appended to the processing chain, the same bypass control frames get (except `notify_when_idle`). So a `"now"` frame can be processed concurrently with one already in flight.
 | `uuid` | [.red]#[code]# Optional string; becomes the injected prompt's uuid. Unvalidated, generated when absent — not a correlation handle.
 | `from` | Reply address, `uds:<socket path>` (see <<_addressing>>). This is the address the receiver trusts, independent of the one inside the attribution envelope.
 | `from_mode` | Sender's permission posture — `"prompting"` is observed; that the set is exactly `"bypass"` or `"prompting"` is [.red]#[code]#; the receiver uses it for permission-mode parity (a `bypass` sender's message may be held for approval).
@@ -343,7 +325,7 @@ waits forever. Verified by observation: a `--wait status` send to a live
 
 |===
 
-Sends carry `expectPeerPid` / `expectPeerProcStart` internally, so the sender
+A send carries the expected pid and start time of the target, so the sender
 verifies the *target's* identity as well — a reply is not delivered to a pid
 that has been recycled. [.red]#[code]#
 
@@ -357,13 +339,13 @@ that has been recycled. [.red]#[code]#
 | Logged as _"Client connected"_. Peer credentials are read from the socket. [.red]#[code]#
 
 | First line
-| Must arrive complete within **30 s** (`firstLineDeadlineMs`), else the
+| Must arrive complete within **30 s**, else the
   connection is closed: _"Closing a connection that sent no complete line
   within N ms"_. Build the payload before connecting.
 
 | Auth
 | [.red]#[code]# If the first line is an auth frame it is consumed here and never
-  dispatched. With `authRequired` set, any line before a valid auth frame is
+  dispatched. Where auth is required, any line before a valid auth frame is
   dropped and the connection destroyed.
 
 | Lines
@@ -372,7 +354,7 @@ that has been recycled. [.red]#[code]#
   whole connection.
 
 | Validation
-| [.red]#[code]# `typeof frame.type === "string"` is the only structural requirement;
+| [.red]#[code]# A string `type` is the only structural requirement;
   then `session_id`, if present, must equal the receiver's. `session_id` is
   **optional** — omit it and the check is skipped. (A client can *confirm* the
   optionality by omitting it, but not the rule.)
@@ -397,8 +379,8 @@ module; `bridge:` is the Remote Control bridge; `did:` is an identity-shaped
 address with no local handler — several call paths reject both outright
 (`errorCode 9`). Only `uds:` addresses appear on the wire.
 
-Hop tokens are keyed, not random [.red]#[code]#: `fwe(address) = HMAC-SHA256(key, address)`
-truncated to 24 hex, with `key = randomBytes(32)` generated once per process.
+Hop tokens are keyed, not random [.red]#[code]#: HMAC-SHA256 over the address,
+truncated to 24 hex, under a 256-bit key generated once per process.
 From outside, all that is visible is a 24-hex token that repeats across messages
 from one session — consistent with the derivation, but equally consistent with a
 random per-session value.
@@ -436,6 +418,17 @@ completing a line inside 30 s is closed — build the payload first
 (`out=$(cmd); printf '%s\n' "$out" | …`).
 
 === A client that authenticates
+
+IMPORTANT: Send the auth frame unconditionally, even where auth is optional.
+It is required by default on Windows, the default follows the platform with no
+setting to change it, and a client that omits it there is dropped with no wire
+diagnostic at all — just an abrupt close. Where auth is off the frame is
+accepted and costs one line.
+
+The sample below still treats the key file as optional, because a third-party
+client cannot always read one; prefer the child token
+(`CLAUDE_CODE_MESSAGING_TOKEN`) whenever the target is the session that spawned
+you.
 
 [source,python]
 ----

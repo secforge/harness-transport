@@ -30,6 +30,18 @@ func newClaude(socket, token, name string) Deliverer {
 	return &claudeBackend{socket: socket, token: token, name: name}
 }
 
+// unauthenticatedNote names the one cause a failed connection cannot report
+// for itself. A receiver that requires auth destroys the connection without
+// sending a reason, so an abrupt close looks like a crash — and the
+// difference matters most on Windows, where requiring it is the default.
+func unauthenticatedNote(t udsmsg.Target) string {
+	if t.Token != "" {
+		return ""
+	}
+	return " (no child token was inherited, so this connection was unauthenticated; " +
+		"a harness that requires authentication closes such a connection without saying why)"
+}
+
 // defaultSenderName identifies this process in the delivered message. It is
 // attribution, not authority: the receiver takes identity from the socket
 // credentials and ignores what a sender claims.
@@ -140,7 +152,8 @@ func (c *claudeBackend) Deliver(ctx context.Context, d Delivery) (Receipt, error
 
 	client, err := udsmsg.Dial(ctx, target)
 	if err != nil {
-		return Receipt{SentBytes: len(text)}, fmt.Errorf("the harness session did not accept a connection: %w", err)
+		return Receipt{SentBytes: len(text)}, fmt.Errorf("the harness session did not accept a connection: %w%s",
+			err, unauthenticatedNote(target))
 	}
 	defer client.Close()
 
@@ -151,7 +164,8 @@ func (c *claudeBackend) Deliver(ctx context.Context, d Delivery) (Receipt, error
 		Attribution: &udsmsg.CrossSession{Name: name, Mode: udsmsg.ModePrompting},
 	})
 	if err != nil {
-		return Receipt{SentBytes: len(text)}, fmt.Errorf("the message was not written to the harness session: %w", err)
+		return Receipt{SentBytes: len(text)}, fmt.Errorf("the message was not written to the harness session: %w%s",
+			err, unauthenticatedNote(target))
 	}
 
 	return Receipt{

@@ -2,6 +2,8 @@ package deliver
 
 import (
 	"context"
+	"net"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -185,5 +187,37 @@ func TestChildTokenIsReportedWhenAbsent(t *testing.T) {
 	ok, reason := newClaude(p.srv.Path(), "cafebabe", "test-client").Available()
 	if !ok || strings.Contains(reason, "unauthenticated") {
 		t.Errorf("with a child token: ok=%v reason=%q", ok, reason)
+	}
+}
+
+// A receiver that requires authentication closes the connection without
+// sending a reason, so an unauthenticated dial fails looking like a crash.
+// The one cause that cannot report itself has to be named by the caller.
+func TestAFailureWithoutATokenSaysSo(t *testing.T) {
+	// A socket file that exists with nothing behind it: Available passes on
+	// the file, and the failure happens at the dial, which is where the note
+	// belongs. A closed inbox fails earlier and never reaches it.
+	path := filepath.Join(t.TempDir(), "4242.sock")
+	ln, err := net.Listen("unix", path)
+	if err != nil {
+		t.Skipf("cannot bind a unix socket here: %v", err)
+	}
+	ln.(*net.UnixListener).SetUnlinkOnClose(false)
+	ln.Close()
+
+	_, err = newClaude(path, "", "test-client").Deliver(context.Background(), Delivery{Cursor: "c", Body: "x"})
+	if err == nil {
+		t.Fatal("delivering to a closed inbox must fail")
+	}
+	if !strings.Contains(err.Error(), "unauthenticated") {
+		t.Errorf("a tokenless failure should name that possibility: %v", err)
+	}
+
+	_, err = newClaude(path, "cafebabe", "test-client").Deliver(context.Background(), Delivery{Cursor: "c", Body: "x"})
+	if err == nil {
+		t.Fatal("delivering to a closed inbox must fail")
+	}
+	if strings.Contains(err.Error(), "unauthenticated") {
+		t.Errorf("a token WAS presented; the note must not be attached: %v", err)
 	}
 }

@@ -36,13 +36,21 @@ type Client struct {
 // accepted, and ON BY DEFAULT ON WINDOWS. So the same tokenless code works in
 // development and dies silently in the one place it is hardest to debug.
 //
-// Presenting a wrong token fails identically, so always sending the frame
-// would not help — what helps is knowing. Authenticated reports whether a
-// token was presented, and a caller whose connection closes unexpectedly
-// should say so rather than leaving the reader to guess.
+// Presenting a wrong token fails identically, so always sending an EMPTY
+// frame would not help either. What helps is not dialling without one:
+// Dial refuses unless Target.Unauthenticated says otherwise, which turns a
+// silent failure on one platform into a local error on every platform.
 func Dial(ctx context.Context, t Target) (*Client, error) {
 	if t.PID != 0 && t.ProcStart != "" && !Alive(t.PID, t.ProcStart) {
 		return nil, fmt.Errorf("pid %d is not the process that published %s", t.PID, t.SocketPath)
+	}
+	if t.Token == "" && !t.Unauthenticated {
+		return nil, fmt.Errorf("refusing to dial %s without a token: a receiver that requires "+
+			"authentication drops every line and destroys the connection without sending a reason, "+
+			"which is the default on Windows — so this would work here and fail invisibly there. "+
+			"Use the inherited child token for our own parent, the published peer token for any "+
+			"other session, or set Target.Unauthenticated to say the risk is intended",
+			t.SocketPath)
 	}
 	var d net.Dialer
 	conn, err := d.DialContext(ctx, "unix", t.SocketPath)

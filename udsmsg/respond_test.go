@@ -40,7 +40,7 @@ func TestAutoStatusAcknowledgesToTheSender(t *testing.T) {
 	}})
 	receiver := listenTest(t, Config{AutoStatus: true})
 
-	c, err := Dial(ctx, Target{SocketPath: receiver.Path()})
+	c, err := Dial(ctx, Target{SocketPath: receiver.Path(), Unauthenticated: true})
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
@@ -101,7 +101,7 @@ func TestGoIdleNotifiesSubscribersOnce(t *testing.T) {
 	}})
 	receiver := listenTest(t, Config{TrackIdle: true})
 
-	c, err := Dial(ctx, Target{SocketPath: receiver.Path()})
+	c, err := Dial(ctx, Target{SocketPath: receiver.Path(), Unauthenticated: true})
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}

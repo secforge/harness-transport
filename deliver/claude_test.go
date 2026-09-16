@@ -2,8 +2,6 @@ package deliver
 
 import (
 	"context"
-	"net"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -48,7 +46,7 @@ func (p *parentSession) received(t *testing.T) *udsmsg.Frame {
 
 func TestDeliverReachesTheParentSession(t *testing.T) {
 	p := startParent(t)
-	d := newClaude(p.srv.Path(), "", "test-client")
+	d := newClaude(p.srv.Path(), "test-token", "test-client")
 
 	r, err := d.Deliver(context.Background(), Delivery{Cursor: "c-99", Body: "a relayed message"})
 	if err != nil {
@@ -76,7 +74,7 @@ func TestDeliverReachesTheParentSession(t *testing.T) {
 // never claim more than it observed.
 func TestClaudeNeverClaimsArrival(t *testing.T) {
 	p := startParent(t)
-	d := newClaude(p.srv.Path(), "", "test-client")
+	d := newClaude(p.srv.Path(), "test-token", "test-client")
 
 	r, err := d.Deliver(context.Background(), Delivery{Cursor: "c", Body: "x"})
 	if err != nil {
@@ -104,7 +102,7 @@ func TestClaudeNeverClaimsArrival(t *testing.T) {
 // to avoid is content that arrives silently incomplete.
 func TestOversizeIsRefusedNotTruncated(t *testing.T) {
 	p := startParent(t)
-	d := newClaude(p.srv.Path(), "", "test-client")
+	d := newClaude(p.srv.Path(), "test-token", "test-client")
 	max, _ := d.MaxIntactBytes()
 
 	r, err := d.Deliver(context.Background(), Delivery{Cursor: "c", Body: strings.Repeat("x", max+1)})
@@ -128,7 +126,7 @@ func TestOversizeIsRefusedNotTruncated(t *testing.T) {
 // size, not a number that fails just below itself.
 func TestLargeMessageArrivesIntact(t *testing.T) {
 	p := startParent(t)
-	d := newClaude(p.srv.Path(), "", "test-client")
+	d := newClaude(p.srv.Path(), "test-token", "test-client")
 
 	body := "BEGIN " + strings.Repeat("payload ", 8000) + " END"
 	if _, err := d.Deliver(context.Background(), Delivery{Cursor: "c", Body: body}); err != nil {
@@ -176,48 +174,36 @@ func TestNoInheritedSocketMeansNoParent(t *testing.T) {
 	}
 }
 
-// The child token is presented when inherited; its absence is reported rather
-// than hidden, since the receiver accepts unauthenticated frames by default.
-func TestChildTokenIsReportedWhenAbsent(t *testing.T) {
+// With the token inherited, the session is reachable and says so plainly.
+func TestAnInheritedTokenMakesTheSessionReachable(t *testing.T) {
 	p := startParent(t)
-	_, reason := newClaude(p.srv.Path(), "", "test-client").Available()
-	if !strings.Contains(reason, "unauthenticated") {
-		t.Errorf("reason = %q, want it to note the missing child token", reason)
-	}
 	ok, reason := newClaude(p.srv.Path(), "cafebabe", "test-client").Available()
-	if !ok || strings.Contains(reason, "unauthenticated") {
+	if !ok || !strings.Contains(reason, "reachable") {
 		t.Errorf("with a child token: ok=%v reason=%q", ok, reason)
 	}
 }
 
-// A receiver that requires authentication closes the connection without
-// sending a reason, so an unauthenticated dial fails looking like a crash.
-// The one cause that cannot report itself has to be named by the caller.
-func TestAFailureWithoutATokenSaysSo(t *testing.T) {
-	// A socket file that exists with nothing behind it: Available passes on
-	// the file, and the failure happens at the dial, which is where the note
-	// belongs. A closed inbox fails earlier and never reaches it.
-	path := filepath.Join(t.TempDir(), "4242.sock")
-	ln, err := net.Listen("unix", path)
-	if err != nil {
-		t.Skipf("cannot bind a unix socket here: %v", err)
-	}
-	ln.(*net.UnixListener).SetUnlinkOnClose(false)
-	ln.Close()
+// Delivering without the inherited token is refused outright rather than
+// attempted: a harness that requires authentication would destroy the
+// connection and say nothing, so the failure is made local and explicit
+// instead of remote and silent.
+func TestNoTokenMeansNoDelivery(t *testing.T) {
+	p := startParent(t)
+	d := newClaude(p.srv.Path(), "", "test-client")
 
-	_, err = newClaude(path, "", "test-client").Deliver(context.Background(), Delivery{Cursor: "c", Body: "x"})
-	if err == nil {
-		t.Fatal("delivering to a closed inbox must fail")
+	ok, reason := d.Available()
+	if ok {
+		t.Error("with no inherited token there is nothing we can deliver to safely")
 	}
-	if !strings.Contains(err.Error(), "unauthenticated") {
-		t.Errorf("a tokenless failure should name that possibility: %v", err)
+	if !strings.Contains(reason, "no child token") {
+		t.Errorf("reason = %q, want it to name the missing token", reason)
 	}
-
-	_, err = newClaude(path, "cafebabe", "test-client").Deliver(context.Background(), Delivery{Cursor: "c", Body: "x"})
-	if err == nil {
-		t.Fatal("delivering to a closed inbox must fail")
+	if _, err := d.Deliver(context.Background(), Delivery{Cursor: "c", Body: "x"}); err == nil {
+		t.Fatal("delivery without a token must be refused, not attempted")
 	}
-	if strings.Contains(err.Error(), "unauthenticated") {
-		t.Errorf("a token WAS presented; the note must not be attached: %v", err)
+	select {
+	case f := <-p.frames:
+		t.Errorf("nothing should have been sent, got %q", f.Text())
+	case <-time.After(250 * time.Millisecond):
 	}
 }

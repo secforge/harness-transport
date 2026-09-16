@@ -201,6 +201,11 @@ type Target struct {
 	SocketPath string
 	Token      string
 	ProcStart  string
+	// Unauthenticated dials without presenting a token. It has to be asked
+	// for by name: a receiver that requires authentication destroys such a
+	// connection and says nothing, so an omitted token must never be
+	// something a caller can do by forgetting. See Dial.
+	Unauthenticated bool
 }
 
 // ResolveTarget locates a session's inbox and the token published for it.

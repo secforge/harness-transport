@@ -174,7 +174,7 @@ func TestChildTokenIsAccepted(t *testing.T) {
 
 func TestAuthOptionalAcceptsUnauthenticated(t *testing.T) {
 	srv, c := testServer(t, Config{RequireAuth: false})
-	cl, err := Dial(context.Background(), Target{SocketPath: srv.Path()}) // no token
+	cl, err := Dial(context.Background(), Target{SocketPath: srv.Path(), Unauthenticated: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -383,7 +383,7 @@ func TestRenameWithoutNameIsDropped(t *testing.T) {
 
 func TestControlHelpers(t *testing.T) {
 	srv, c := testServer(t, Config{})
-	cl, err := Dial(context.Background(), Target{SocketPath: srv.Path()})
+	cl, err := Dial(context.Background(), Target{SocketPath: srv.Path(), Unauthenticated: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -412,7 +412,7 @@ func TestControlHelpers(t *testing.T) {
 // temp-dir socket is rejected before it goes on the wire.
 func TestNotifyWhenIdleValidatesReplyAddress(t *testing.T) {
 	srv, _ := testServer(t, Config{})
-	cl, err := Dial(context.Background(), Target{SocketPath: srv.Path()})
+	cl, err := Dial(context.Background(), Target{SocketPath: srv.Path(), Unauthenticated: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -428,7 +428,7 @@ func TestNotifyWhenIdleValidatesReplyAddress(t *testing.T) {
 
 func TestSendUserRejectsUnshapedReplyAddress(t *testing.T) {
 	srv, _ := testServer(t, Config{})
-	cl, err := Dial(context.Background(), Target{SocketPath: srv.Path()})
+	cl, err := Dial(context.Background(), Target{SocketPath: srv.Path(), Unauthenticated: true})
 	if err != nil {
 		t.Fatal(err)
 	}

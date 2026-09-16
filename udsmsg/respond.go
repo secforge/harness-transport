@@ -66,6 +66,13 @@ func DialAddress(ctx context.Context, addr string) (*Client, error) {
 			t.Token, t.ProcStart = k.PeerToken, k.ProcStart
 		}
 	}
+	// Dial refuses a tokenless connection, and this is the one place that
+	// asks for the exemption rather than being a caller who forgot. We are
+	// answering an address a peer gave us; if it published no key file there
+	// is no token in existence to present, and no way to obtain one. The
+	// choice is between replying unauthenticated and never replying at all —
+	// and the peer chose that by not publishing.
+	t.Unauthenticated = t.Token == ""
 	return Dial(ctx, t)
 }
 

@@ -30,18 +30,6 @@ func newClaude(socket, token, name string) Deliverer {
 	return &claudeBackend{socket: socket, token: token, name: name}
 }
 
-// unauthenticatedNote names the one cause a failed connection cannot report
-// for itself. A receiver that requires auth destroys the connection without
-// sending a reason, so an abrupt close looks like a crash — and the
-// difference matters most on Windows, where requiring it is the default.
-func unauthenticatedNote(t udsmsg.Target) string {
-	if t.Token != "" {
-		return ""
-	}
-	return " (no child token was inherited, so this connection was unauthenticated; " +
-		"a harness that requires authentication closes such a connection without saying why)"
-}
-
 // defaultSenderName identifies this process in the delivered message. It is
 // attribution, not authority: the receiver takes identity from the socket
 // credentials and ignores what a sender claims.
@@ -107,9 +95,15 @@ func (c *claudeBackend) Available() (bool, string) {
 		return false, fmt.Sprintf("the harness session's inbox at %s is gone, so the harness that launched this process is no longer listening", c.socket)
 	}
 	if c.token == "" {
-		// Auth is optional on the receiving side, so this is a warning
-		// rather than a refusal.
-		return true, "the harness session is reachable, but no child token was inherited, so the delivery will be unauthenticated"
+		// Not a warning. A receiver that requires authentication destroys an
+		// unauthenticated connection and sends no reason, which is the
+		// default on Windows — so delivering without the inherited token
+		// would work here and fail invisibly elsewhere. Every process a
+		// session spawns is given the token, so its absence means this
+		// process was not spawned by the session it is pointed at.
+		return false, "the harness session's inbox is there, but no child token was inherited — " +
+			"this process was not started by that session, and delivering without the token would " +
+			"be refused without explanation on a harness that requires it"
 	}
 	return true, "the Claude Code harness that launched this process is reachable"
 }
@@ -152,8 +146,7 @@ func (c *claudeBackend) Deliver(ctx context.Context, d Delivery) (Receipt, error
 
 	client, err := udsmsg.Dial(ctx, target)
 	if err != nil {
-		return Receipt{SentBytes: len(text)}, fmt.Errorf("the harness session did not accept a connection: %w%s",
-			err, unauthenticatedNote(target))
+		return Receipt{SentBytes: len(text)}, fmt.Errorf("the harness session did not accept a connection: %w", err)
 	}
 	defer client.Close()
 
@@ -164,8 +157,7 @@ func (c *claudeBackend) Deliver(ctx context.Context, d Delivery) (Receipt, error
 		Attribution: &udsmsg.CrossSession{Name: name, Mode: udsmsg.ModePrompting},
 	})
 	if err != nil {
-		return Receipt{SentBytes: len(text)}, fmt.Errorf("the message was not written to the harness session: %w%s",
-			err, unauthenticatedNote(target))
+		return Receipt{SentBytes: len(text)}, fmt.Errorf("the message was not written to the harness session: %w", err)
 	}
 
 	return Receipt{

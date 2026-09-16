@@ -117,7 +117,7 @@ func run() int {
 	flag.DurationVar(&o.timeout, "timeout", 5*time.Minute, "give up after this long; with --wait replies, how long to keep listening")
 	flag.BoolVar(&o.anySender, "any-sender", false, "accept frames from any process, not only the addressed one")
 	flag.StringVar(&o.fromMode, "from-mode", string(udsmsg.ModePrompting), "our permission posture: prompting or bypass")
-	flag.BoolVar(&o.noAuth, "no-auth", false, "do not present a token even if a key file exists")
+	flag.BoolVar(&o.noAuth, "no-auth", false, "dial without a token even if a key file exists; a receiver that requires authentication closes such a connection without a reason")
 	flag.BoolVar(&o.noHint, "no-hint", false, "send the bare text, without the cross-session attribution wrapper")
 	flag.StringVar(&o.name, "name", "", "how to identify ourselves in the message (default: claude-send in <dir>)")
 	flag.BoolVar(&o.jsonOut, "json", false, "print every received frame as JSON")
@@ -252,7 +252,9 @@ func send(o options, text string) int {
 		return exitNoTarget
 	}
 	if o.noAuth {
-		target.Token = ""
+		// Deliberate, and it has to be said twice — once by the flag and
+		// once to the library, which otherwise refuses a tokenless dial.
+		target.Token, target.Unauthenticated = "", true
 	}
 	// A published start time lets us refuse a recycled pid before we speak.
 	if target.PID != 0 && target.ProcStart != "" && !udsmsg.Alive(target.PID, target.ProcStart) {

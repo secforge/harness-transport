@@ -160,8 +160,14 @@ surface, not as an authenticated channel.
 The intent is that **who you are is not something you get to state**. A sender
 puts an address in `from`, but that is a claim about where replies should go,
 not evidence of identity. The receiver takes identity from the kernel instead —
-the credentials attached to the connection itself (`SO_PEERCRED`), which no
-sender can forge — and treats the claimed address as something to be
+the credentials attached to the connection itself
+(`SO_PEERCRED`footnote:[`SO_PEERCRED` is a socket option on unix domain sockets:
+reading it returns the pid, uid and gid of the process on the other end, as
+recorded by the kernel when the connection was made. The values come from the
+kernel rather than from anything sent over the socket, so a peer cannot choose
+or alter them. Linux-specific; other systems have equivalents under different
+names, and on Windows the named-pipe transport uses a different mechanism
+entirely.]), which no sender can forge — and treats the claimed address as something to be
 corroborated against it, using the session registry as the record of which
 socket belongs to which process. A start time is carried alongside the pid so
 that a pid which has since been recycled cannot inherit the identity of the

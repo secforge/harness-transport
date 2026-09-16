@@ -22,16 +22,20 @@ type claudeBackend struct {
 	// model can answer with its ordinary reply rather than another tool.
 	// Empty means one-way, which is the default.
 	replyTo string
+	// mode is this process's asserted permission posture, or empty for no
+	// claim. See WithAssertedMode: empty means a bypass-mode receiver holds the
+	// message, which is the honest outcome when the posture is unknown.
+	mode udsmsg.Mode
 
 	mu   sync.Mutex
 	name string
 }
 
-func newClaude(socket, token, name, replyTo string) Deliverer {
+func newClaude(socket, token, name, replyTo string, mode udsmsg.Mode) Deliverer {
 	if name == "" {
 		name = defaultSenderName()
 	}
-	return &claudeBackend{socket: socket, token: token, name: name, replyTo: replyTo}
+	return &claudeBackend{socket: socket, token: token, name: name, replyTo: replyTo, mode: mode}
 }
 
 // defaultSenderName identifies this process in the delivered message. It is
@@ -162,10 +166,15 @@ func (c *claudeBackend) Deliver(ctx context.Context, d Delivery) (Receipt, error
 	msgID, err := client.SendUser(udsmsg.User{
 		Text: text,
 		From: c.replyTo,
+		// The mode goes on the FRAME, where the receiver's accept-or-hold
+		// decision reads it, and in the envelope, where it is displayed.
+		// Asserting one in only one place would be incoherent, and the
+		// frame is the one that decides.
+		FromMode: c.mode,
 		Attribution: &udsmsg.CrossSession{
 			From: c.replyTo,
 			Name: name,
-			Mode: udsmsg.ModePrompting,
+			Mode: c.mode,
 		},
 	})
 	if err != nil {

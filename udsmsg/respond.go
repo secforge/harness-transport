@@ -150,7 +150,6 @@ type idleSubs struct {
 type idleSub struct {
 	addr  string
 	msgID string
-	mode  Mode
 }
 
 // Subscribe records a notify_when_idle request. A request whose reply address
@@ -175,7 +174,7 @@ func (s *Server) Subscribe(f *Frame) error {
 			return nil // already subscribed; the notice is one-shot either way
 		}
 	}
-	s.idle.subs = append(s.idle.subs, idleSub{addr: f.From, msgID: f.MsgID, mode: f.FromMode})
+	s.idle.subs = append(s.idle.subs, idleSub{addr: f.From, msgID: f.MsgID})
 	return nil
 }
 
@@ -211,7 +210,7 @@ func (s *Server) GoIdle(ctx context.Context, state IdleState, detail string) err
 				State:     string(state),
 				Detail:    detail,
 				From:      s.Addr(),
-				FromMode:  sub.mode,
+				FromMode:  s.mode,
 			})
 		}()
 		if err != nil && firstErr == nil {

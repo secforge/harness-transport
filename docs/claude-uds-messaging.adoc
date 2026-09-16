@@ -228,6 +228,25 @@ Injects a prompt into the receiving session's queue.
 | `file_attachments` | [.red]#[code]# Array of `{file_uuid, file_name, is_image?, sha256?, file_size?}`. Materialised locally before injection; a prefix naming the received files is prepended to the prompt.
 |===
 
+`from_mode` is the one field here a sender is tempted to get wrong on
+purpose. The receiver holds a message whose asserted mode differs from its
+own, lets a matching one through, and cannot check either way — so the
+posture that clears the gate is always available to anyone willing to state
+it. Where the gate exists for a user's decision, stating it is spending that
+decision on their behalf.
+
+The library therefore gives no way to state one casually. `deliver` exposes
+`WithDetectedMode`, and an inbox sets `Config.ModeSource`; both read the
+posture from the spawning session's command line via
+`udsmsg.DetectParentMode` and refuse rather than guess when they cannot tell.
+A caller who genuinely knows better can still claim one — `WithAssertedMode`,
+`Server.AssertModeUnverified` — and the names are the warning. Asserting
+nothing is the safe failure: a frame with no `from_mode` is held only by a
+`bypass` receiver, never by a prompting one.
+
+Both derivations read *launch* flags, so a mode changed mid-session is
+invisible. That error runs toward a hold, not through one.
+
 The injected turn is marked `isMeta`, `skipSlashCommands` and
 `skipAttachments`, so a peer cannot invoke slash commands in the receiver. [.red]#[code]#
 The consequence is testable from outside; the flag names are not.

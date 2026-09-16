@@ -68,6 +68,16 @@ type Config struct {
 	AllowUnidentifiedPeers bool
 	// PublishKey writes the key file so peers can discover PeerToken.
 	PublishKey bool
+	// ModeSource says where this inbox's permission posture comes from: not
+	// set, so no mode is asserted; derived and required; or derived where
+	// that is possible. See ModeSource for the three.
+	//
+	// It names a SOURCE and can never name a posture. The posture is a value
+	// a receiver acts on and cannot verify, and a struct field is the thing
+	// people fill in — so the only way to assert one here is to have it
+	// derived, and the only way to claim one is the function that says so in
+	// its name (Server.AssertModeUnverified).
+	ModeSource ModeSource
 	// AutoStatus answers every accepted user frame that carries a reply
 	// address with a "delivered" peer_message_status, as a session does. A
 	// peer waiting on delivery otherwise learns nothing until its timeout.
@@ -84,11 +94,40 @@ type Config struct {
 	Logger           *log.Logger
 }
 
+// ModeSource says where an inbox's asserted permission posture comes from.
+// There is no value meaning "whatever the caller says": a posture is either
+// established or absent.
+type ModeSource int
+
+const (
+	// ModeSourceNone asserts no posture. A frame with no from_mode is held
+	// only by a receiver in bypass, so this costs a hold at worst.
+	ModeSourceNone ModeSource = iota
+	// ModeSourceDerived reads the posture from the spawning session and
+	// asserts nothing if it cannot, binding either way. This is what a
+	// cross-platform caller wants: detection works on Linux and errors on
+	// darwin and windows, and the platforms where it works are exactly the
+	// ones where it helps. Failing to detect costs a hold; failing to bind
+	// would cost the whole return path.
+	ModeSourceDerived
+	// ModeSourceDerivedRequired refuses to bind unless the posture can be
+	// established. For a caller whose feature is meaningless without parity,
+	// not starting beats starting silently without it — but on any platform
+	// with no /proc that is every time, so it is opt-in for exactly that
+	// caller rather than the default.
+	ModeSourceDerivedRequired
+)
+
 // Server is a bound inbox.
 type Server struct {
 	cfg  Config
 	ln   *net.UnixListener
 	path string
+
+	// mode is the posture we assert on frames we originate. Empty asserts
+	// nothing, which is the honest default: a receiver holds only on a
+	// MISMATCH, so a frame that claims no mode is not held.
+	mode Mode
 
 	mu     sync.Mutex
 	closed bool
@@ -132,6 +171,23 @@ func Listen(cfg Config) (*Server, error) {
 		return nil, err
 	}
 	s := &Server{cfg: cfg, ln: ln, path: path}
+
+	if cfg.ModeSource != ModeSourceNone {
+		m, err := DetectParentMode()
+		switch {
+		case err == nil:
+			s.mode = m
+		case cfg.ModeSource == ModeSourceDerivedRequired:
+			ln.Close()
+			os.Remove(path)
+			return nil, fmt.Errorf("ModeSourceDerivedRequired: %w", err)
+		default:
+			// Bind anyway, asserting nothing. Worth saying out loud: the
+			// symptom otherwise is someone else's message being held, seen
+			// from the wrong side of the socket.
+			s.logf("asserting no permission mode (%v); frames we originate may be held by a bypass-mode receiver", err)
+		}
+	}
 
 	if cfg.PublishKey {
 		k := &Key{PeerToken: cfg.PeerToken}
@@ -459,4 +515,35 @@ func readLine(r *bufio.Reader, max int) (line []byte, complete bool, err error) 
 		}
 		return buf[:len(buf)-1], true, nil
 	}
+}
+
+// logf reports something worth knowing that is not a dropped frame or an I/O
+// error. Silent when no Logger is configured.
+func (s *Server) logf(format string, args ...any) {
+	if s.cfg.Logger != nil {
+		s.cfg.Logger.Printf("udsmsg: "+format, args...)
+	}
+}
+
+// Mode is the permission posture this inbox asserts on the frames it
+// originates. Empty means it asserts none.
+func (s *Server) Mode() Mode { return s.mode }
+
+// AssertModeUnverified makes this inbox claim m without establishing it.
+//
+// Nothing checks the claim: a receiver holds a frame whose mode mismatches
+// its own and lets a matching one through, so a claim chosen to match is a
+// claim that clears the gate. Where the posture is a user's decision, that
+// makes asserting it upward a way of spending permission the user did not
+// give. Prefer Config.ModeSource, which reads the posture instead, and reach
+// for this only where the caller genuinely knows something the parent's
+// command line cannot show.
+//
+// The honest path and this one differ only by which function was called, and
+// that difference is invisible afterwards — so it is logged. An inbox whose
+// posture was claimed rather than established should say so somewhere other
+// than in the caller's memory.
+func (s *Server) AssertModeUnverified(m Mode) {
+	s.mode = m
+	s.logf("permission mode %q asserted by the caller, not derived from the spawning session", m)
 }

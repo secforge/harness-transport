@@ -267,7 +267,7 @@ func TestTheTwoSizeFiguresAnswerDifferentQuestions(t *testing.T) {
 // still fit the wire, or the number is a promise the transport cannot keep.
 func TestWorstCaseContentAtTheFloorStillFits(t *testing.T) {
 	p := startParent(t)
-	d := newClaude(p.srv.Path(), "", "test-client", "")
+	d := newClaude(p.srv.Path(), "", "test-client", "", udsmsg.ModePrompting)
 	max, err := d.MaxIntactBytes()
 	if err != nil {
 		t.Fatal(err)
@@ -290,7 +290,7 @@ func TestWorstCaseContentAtTheFloorStillFits(t *testing.T) {
 // limit derived from content it does not have.
 func TestFitsAllowsFarMoreProseThanTheFloor(t *testing.T) {
 	p := startParent(t)
-	d := newClaude(p.srv.Path(), "", "test-client", "")
+	d := newClaude(p.srv.Path(), "", "test-client", "", udsmsg.ModePrompting)
 	max, _ := d.MaxIntactBytes()
 
 	ok, wire, err := d.Fits(Delivery{Cursor: "c", Body: strings.Repeat("ordinary prose ", max/3)})

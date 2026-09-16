@@ -70,6 +70,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/secforge/harness-transport/udsmsg"
 )
 
 // Observation is what the backend actually observed about a delivery. The
@@ -253,6 +255,7 @@ type Option func(*options)
 type options struct {
 	senderName   string
 	replyAddress string
+	mode         udsmsg.Mode
 }
 
 // WithSenderName sets how this process is named to the harness: the attribution
@@ -283,6 +286,50 @@ func WithReplyAddress(addr string) Option {
 	return func(o *options) { o.replyAddress = addr }
 }
 
+// WithDetectedMode establishes this process's permission posture by reading
+// it from the session that spawned us, and asserts that.
+//
+// This is the call to reach for. The posture is a CLAIM the receiver acts on
+// and cannot check, so the one safe way to produce it is to derive it: see
+// udsmsg.DetectParentMode for what it reads and the two ways it can be stale,
+// both of which fail toward a hold rather than through a gate.
+//
+// When the posture cannot be established this asserts NOTHING rather than
+// guessing, and the message may then be held — which is the correct outcome,
+// since the only guess that would help is the one that spends permission the
+// user did not give. Call udsmsg.DetectParentMode directly if you want the
+// reason why.
+func WithDetectedMode() Option {
+	return func(o *options) {
+		if m, err := udsmsg.DetectParentMode(); err == nil {
+			o.mode = m
+		}
+	}
+}
+
+// WithAssertedMode asserts this process's permission posture, which the
+// receiver uses to decide whether to deliver a message or park it for its
+// user. Prefer WithDetectedMode, which establishes the posture instead of
+// taking it on the caller's word.
+//
+// The receiver's rule: a message whose asserted mode MATCHES its own is
+// accepted; one that differs is held; and one asserting NOTHING is held when
+// the receiver is in bypass and accepted when it is prompting. Since most
+// sessions run in bypass, asserting nothing usually means held — on an
+// interactive host that is an approval prompt, and on a headless one there is
+// no approval surface, so the hold expires and the message is lost. From the
+// sending side all three look like a successful write.
+//
+// So this is worth setting. It is also a CLAIM rather than a credential — the
+// receiver acts on it and cannot check it — which is why there is no default
+// and why nothing here infers one. Assert what is true of this process; where
+// that cannot be established, assert nothing and accept the hold. Asserting
+// bypass to clear a gate that exists for a user's benefit would be laundering
+// their decision, and a message parked is better than a permission bypassed.
+func WithAssertedMode(m udsmsg.Mode) Option {
+	return func(o *options) { o.mode = m }
+}
+
 // Open returns a Deliverer for whichever harness launched this process.
 //
 // It never returns nil: when no harness can be reached the result reports that
@@ -297,7 +344,7 @@ func Open(opts ...Option) Deliverer {
 		o.senderName = defaultSenderName()
 	}
 	if sock := os.Getenv(EnvClaudeSocket); sock != "" {
-		return newClaude(sock, os.Getenv(EnvClaudeToken), o.senderName, o.replyAddress)
+		return newClaude(sock, os.Getenv(EnvClaudeToken), o.senderName, o.replyAddress, o.mode)
 	}
 	c := newCodex(o.senderName)
 	// A shell-tool child of a Codex harness is told its thread at exec, the

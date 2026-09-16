@@ -74,9 +74,11 @@ func NewSessionEntry(socketPath, name string) (*SessionEntry, error) {
 
 // NewMCPEntry builds a registry entry for an MCP server's own inbox.
 //
-// Registering is what lets the harness identify a reply target, and an
-// unidentified target is what gets a reply held for approval. But an MCP
-// server is not a session, so the entry must not read like one: the name
+// Registering is what lets the harness identify a reply target by name. It
+// does NOT stop a reply being held for approval — measured, two sessions,
+// registered and unregistered targets alike: the hold is a receive-side
+// policy on cross-session sends and no addressing choice avoids it. But an
+// MCP server is not a session, so the entry must not read like one: the name
 // carries BOTH the harness session it belongs to and the MCP server it is,
 // and the kind says what it actually is rather than borrowing "interactive".
 //

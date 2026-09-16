@@ -222,13 +222,20 @@ func ResolveTarget(pid int) (Target, error) {
 	if k != nil {
 		t.Token, t.ProcStart = k.PeerToken, k.ProcStart
 	}
-	// Reaching our OWN parent is not a peer connection, and should not be
-	// made into one. The inherited child token identifies us as that
-	// session's child, which skips cross-session handling entirely — no
-	// permission-mode parity, no holding for approval, no exposure to a
-	// session's refuse-cross-session-messages setting. The peer token from
-	// the key file would work and would place us in exactly that machinery,
-	// for a message from a process the session started itself.
+	// Reaching our OWN parent uses the credential that session handed us.
+	// The inherited child token authenticates only to the parent's inbox,
+	// needs no configuration, and is the correct choice there; the peer
+	// token from the key file is for reaching any OTHER session, and the
+	// two do not interchange — the child token fails elsewhere rather than
+	// downgrading.
+	//
+	// It does NOT buy exemption from the receiver's cross-session policy,
+	// though an earlier version of this comment claimed it did. Whether a
+	// message is held for approval is decided receive-side, and on Linux it
+	// turns on PROCESS ANCESTRY rather than on which token was presented —
+	// the token label only decides where ancestry is unavailable. So a
+	// process genuinely spawned by that session may be treated as its
+	// child; presenting the child token is not what makes it one.
 	if env := os.Getenv(EnvMessagingSocket); env != "" && env == path {
 		if child := os.Getenv(EnvMessagingToken); child != "" {
 			t.Token = child

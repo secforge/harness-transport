@@ -129,9 +129,13 @@ func TestTargetFromEnv(t *testing.T) {
 	}
 }
 
-// Reaching our own parent should authenticate as its CHILD, not as a peer:
-// the child token skips cross-session handling, which a message from a
-// process the session started itself has no business going through.
+// Reaching our own parent should present the credential that session handed
+// us, not the one published for strangers. The two do not interchange — the
+// child token authenticates to the parent's inbox and nowhere else — and it
+// needs no configuration, which the key file does.
+//
+// It is NOT a way around the receiver's cross-session policy: that is decided
+// receive-side, on Linux by process ancestry rather than by the token.
 func TestOwnParentIsReachedWithTheChildToken(t *testing.T) {
 	// Bound at the canonical <pid>.sock, since that is the name
 	// ResolveTarget looks for — an allocated inbox carries a discriminator

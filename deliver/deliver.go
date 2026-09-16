@@ -186,11 +186,31 @@ type Deliverer interface {
 // and nothing above it has been tested. Do not split a message at this
 // boundary — splitting at a boundary requires having found one.
 //
-// Method: numbered-checkpoint ladder with sentinels and a nonce, delivered
-// over udsmsg to live Claude Code 2.1.272 sessions, each of which reported the
-// highest checkpoint it could see and checked for gaps below it. 1, 4, 16, 32,
-// 64, 128, 256 and 512 KB and 1,000,019 bytes — every rung intact, no cut
-// found at any size (2026-09-15).
+// THE NUMBER BELONGS TO A ROUTE, NOT TO A PAIR OF PROCESSES. Quote it only
+// with the route attached, because the same message between the same two
+// machines survives one path and is cut on another:
+//
+//	route                                  observed
+//	udsmsg push into a Claude Code session  1,000,019 bytes intact
+//	MCP pull (hub_wait) into a Codex one    cut at roughly 1,200 characters
+//
+// The first is this constant, and it is a measurement: a numbered-checkpoint
+// ladder with sentinels and a nonce, delivered to live Claude Code 2.1.272
+// sessions, each reporting the highest checkpoint it could see and checking
+// for gaps below it — 1, 4, 16, 32, 64, 128, 256 and 512 KB and 1,000,019
+// bytes, every rung intact, no cut at any size (2026-09-15).
+//
+// The second is NOT a measurement and must not be treated as one. It is a
+// single observation of one message arriving cut, confirmed as a real cut
+// rather than a display artefact only because a second client received the
+// same message whole over the other route. Nobody has run a ladder on that
+// path. "Roughly 1,200" is a symptom with a rough size, and the true figure
+// could be anywhere below it.
+//
+// The two differ by three orders of magnitude, which is the entire reason
+// this comment names routes at all. Recording two figures without saying
+// which route each belongs to would commit the exact error the constant
+// exists to prevent.
 //
 // Two cautions the experiment itself produced. A receiver stops participating
 // long before the transport does: one session went silent after roughly 1.3 MB

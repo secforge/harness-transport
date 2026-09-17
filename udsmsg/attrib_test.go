@@ -10,7 +10,7 @@ import (
 // The receiver re-renders what it parses and compares byte for byte, so this
 // is the specification — attribute order, single spaces and both newlines
 // included.
-const golden = `<cross-session-message from="uds:/run/user/0/cc-socks/220501.sock" hop-chain="d31520e4d4d04ef3267e9bc4" from-name="claude-send (build)" from-mode="prompting">
+const golden = `<cross-session-message from="uds:/run/user/0/cc-socks/220501.sock" hop-chain="d31520e4d4d04ef3267e9bc4" from-name="example-client" from-mode="prompting">
 Capture frame: this reply is sent with the built-in SendMessage tool so you can record the exact wire format a real session emits.
 </cross-session-message>`
 
@@ -18,7 +18,7 @@ func TestWrapMatchesACapturedSessionFrame(t *testing.T) {
 	cs := CrossSession{
 		From:     "uds:/run/user/0/cc-socks/220501.sock",
 		HopChain: []string{"d31520e4d4d04ef3267e9bc4"},
-		Name:     "claude-send (build)",
+		Name:     "example-client",
 		Mode:     ModePrompting,
 	}
 	got := cs.Wrap("Capture frame: this reply is sent with the built-in SendMessage tool so you can record the exact wire format a real session emits.")

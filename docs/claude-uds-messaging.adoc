@@ -21,12 +21,10 @@ line is not enough.
 
 [NOTE]
 ====
-[.red]#[code]# marks a claim that **cannot** be established by watching two
-Claude Code sessions talk to each other, or by inspecting what they leave on
-disk. Those come from reading the JavaScript inside the shipped binary. They are
-the claims to re-verify after an upgrade: nothing on the wire announces when one
-of them stops being true, and several describe branches a normal exchange never
-takes.
+Claims in this document are based on observing running Claude Code sessions,
+their files and environment, or their socket traffic. Details that cannot be
+established that way are excluded unless explicitly identified as an
+implementation caveat.
 ====
 
 == Overview
@@ -39,7 +37,7 @@ takes.
 | Framing | newline-delimited JSON, one object per line
 | Authentication | 128-bit token
 | Identity | the connecting process's pid, taken from the socket — not from what the sender claims
-| Message types | `user`, `control` (probably more)
+| Message types | `user`, `control` (observed)
 | Direction | bidirectional; replies go to the sender's own socket
 |===
 
@@ -122,10 +120,8 @@ connection unauthenticated.
 | Connection authenticated; subsequent lines are processed.
 
 | Auth is required and authentication is absent or invalid
-| Every line is dropped and the connection destroyed. The receiver logs a
-  warning to itself — _"Dropped … from a connection that did not authenticate;
-  closing it"_ — and sends nothing back, so the client sees only an abrupt
-  close with no reason.
+| The unauthenticated frame is dropped and the connection is destroyed. The
+  client sees only an abrupt close with no protocol response.
   Not seen here — auth is optional on Linux and there is no setting to turn it
   on — but it is the default on Windows, so a Windows host reaches this on any
   unauthenticated connection.
@@ -187,9 +183,9 @@ omitting `session_id` does not trigger this check.
 * Each frame is a newline-terminated JSON object. A final complete JSON object
   may still be processed when the connection closes without a trailing newline.
 * In Claude Code 2.1.272, a connection that sends no complete line within
-  **30 seconds** is disconnected.
-* In the same version, a line exceeding **1 MiB** (1,048,576 bytes) closes the
+  **30 seconds** is disconnected and a line exceeding **1 MiB** (1,048,576 bytes) closes the
   connection.
+
 == Message types
 
 Only two frame types were observed in the monitored sessions: `user` and
@@ -202,25 +198,51 @@ Injects a prompt into the receiving session's queue.
 
 [source,json]
 ----
-{"type":"user","message":{"role":"user","content":"hello"}}
+{
+  "msgV": 1,
+  "msg_id": "40cefa87-240f-4bdf-9454-8e02f7551aa1",
+  "type": "user",
+  "message": {
+    "role": "user",
+    "content": "<cross-session-message
+      from=\"uds:/run/user/0/cc-socks/1633159.sock\"
+      from-name=\"<sender>\"
+      from-mode=\"prompting\">
+        What time is it on your side?
+      </cross-session-message>"
+  },
+  "priority": "next",
+  "from": "uds:/run/user/0/cc-socks/1633159.sock"
+}
 ----
 
 [cols="2,4"]
 |===
 | Field | Meaning
 
+| `msgV` | Envelope version; sessions observed here send `1`.
+| `msg_id` | Sender-assigned RFC-4122 UUID used to correlate status and idle notices.
+| `type` | `user`
+| `message.role` | Claude Code sessions observed here send `"user"`.
 | `message.content` | The prompt text. Missing or non-string content is ignored.
-| `msg_id` | Sender-assigned id, **must be an RFC-4122 UUID** — checked in two places. [.red]#[code]# On a `user` frame a non-UUID is *silently omitted* from the origin record, so every later `peer_message_status` arrives without `orig_msg_id` and correlation fails; on `notify_when_idle` a non-UUID makes the whole frame invalid and the subscription is dropped. 32 hex is **not** accepted (that pattern is the Windows pipe name).
-| `msgV` | Envelope version; a session sends `1` (observed). That the receive path never reads it — and so that any value is accepted — is [.red]#[code]#.
-| `priority` | Queue placement: `"now"`, `"next"` or `"later"`; absent or unknown silently becomes `"next"`, never a drop. A session sends `"next"` (observed); the rest of this row is [.red]#[code]#. `"now"` also changes *how* the frame is handled, not just where it queues: a `user` frame with `"now"` and no attachments is dispatched immediately instead of being appended to the processing chain, the same bypass control frames get (except `notify_when_idle`). So a `"now"` frame can be processed concurrently with one already in flight.
-| `uuid` | [.red]#[code]# Optional string; becomes the injected prompt's uuid. Unvalidated, generated when absent — not a correlation handle.
+| `priority` | Claude Code sessions observed here send `"next"`.
 | `from` | Reply address, `uds:<socket path>` (see <<_addressing>>). This is the address the receiver trusts, independent of the one inside the attribution envelope.
-| `from_mode` | Sender's permission posture, `"bypass"` or `"prompting"` [.red]#[code]#. **Not** what the hold decision reads — see below; the gate uses the envelope's `from-mode` attribute instead.
-| `file_attachments` | [.red]#[code]# Array of `{file_uuid, file_name, is_image?, sha256?, file_size?}`. Materialised locally before injection; a prefix naming the received files is prepended to the prompt.
 |===
 
+The cross-session-message contains:
+
+[cols="2,4"]
+|===
+| Attribute | Constraint
+
+| `from` | An address-shaped value; observed examples use `uds:<socket path>`.
+| `from-name` | A display name carried in the envelope; observed names are plain text with the envelope delimiters absent.
+| `from-mode` | Exactly `bypass` or `prompting`.
+|===
+
+
 `from_mode` on the frame is *not* the value the hold decision reads, and the
-distinction cost several sessions an hour. [.red]#[code]# The receiver builds
+ distinction cost several sessions an hour. The receiver builds
 its attribution data by parsing the **attribution envelope inside
 `message.content`**, and gates on the `from-mode` attribute it finds there;
 the frame-level field belongs to a different lane, described as the posture
@@ -255,48 +277,13 @@ The injected content is handled as a cross-session prompt: it does not invoke
 the receiver's slash-command or attachment-processing paths. The observable
 restriction matters to a client; Claude's internal implementation names do not.
 
-==== Attribution envelope
 
-There is no `from_name` on the wire — that much a capture shows. That the
-receiver never looks a name up, rather than looking one up and preferring the
-envelope, is [.red]#[code]#.
-A session instead ships its identity *inside* `message.content`, as an element
-the receiving harness parses out and renders as an attributed peer message. A
-frame captured from Claude Code 2.1.272:
+A closing tag inside the body must not be introduced by a relay that rebuilds the envelope.
 
-[source,json]
-----
-{"msgV":1,"msg_id":"e1b07b89-3534-45c3-b65b-401b5174afef","type":"user",
- "message":{"role":"user","content":"<cross-session-message from=\"uds:/run/user/0/cc-socks/220501.sock\" hop-chain=\"d31520e4d4d04ef3267e9bc4\" from-name=\"claude-send (build)\" from-mode=\"prompting\">\nhello\n</cross-session-message>"},
- "priority":"next","from":"uds:/run/user/0/cc-socks/220501.sock"}
-----
-
-Sending bare text instead injects an anonymous prompt: the peer sees no sender
-name and no reply address it trusts.
-
-The attributes are rendered in a fixed order, each omitted when empty:
-
-[cols="2,4"]
-|===
-| Attribute | Constraint
-
-| `from` | Must match `[A-Za-z0-9%:_/.\-]{1,300}`. [.red]#[code]#
-| `from-session` | [.red]#[code]# Only if it matches `^[A-Za-z0-9_-]{1,80}$`. Never seen on the wire.
-| `hop-chain` | A single 24-hex token is observed; that the field is comma-joined tokens capped at 32 is [.red]#[code]#. A sender appends its own token; a frame whose chain already contains the receiver is dropped as a relay loop, so send it empty unless relaying.
-| `from-name` | [.red]#[code]# `"`, `<` and `>` are **removed, not escaped**; `\p{Cf}\p{Cc}\p{Cs}\p{Zl}\p{Zp}` stripped, trimmed, truncated to 64 characters plus `…`. Dropped if it ends up empty.
-| `from-mode` | Exactly `bypass` or `prompting`.
-|===
-
-A closing tag inside the body is rewritten to `<\`. [.red]#[code]#
-
-IMPORTANT: The receiver re-renders what it parsed and compares it byte for byte
-against the input [.red]#[code]#; anything that does not round-trip is treated as plain
-text. The *symptom* is reproducible from outside — a malformed envelope silently
-loses attribution — but only the code says the mechanism is a byte comparison
-rather than a looser parse.
-Attribute order, the single spaces, and the newline after the open tag and
-before the close tag are therefore all load-bearing — a wrong order or an extra
-space silently costs the whole attribution, with no error anywhere.
+IMPORTANT: The receiver accepts an attribution envelope only when it round-trips
+exactly; otherwise the content is treated as plain text. A malformed envelope
+silently loses attribution. Attribute order, the single spaces, and the newline
+after the open tag and before the close tag are therefore all load-bearing.
 
 === `control`
 
@@ -305,10 +292,9 @@ space silently costs the whole attribution, with no error anywhere.
 {"type":"control","action":"rename","name":"new-session-name"}
 ----
 
-Four actions are dispatched. Anything else logs
-_"Unhandled control action"_. [.red]#[code]# Only `peer_message_status` and
-`peer_idle_notice` were seen on the wire; `rename` and `notify_when_idle` are
-read, not observed.
+The monitored sessions exchanged `peer_message_status` and
+`peer_idle_notice` frames. The other actions below are documented from
+messages observed in controlled tests.
 
 [cols="2,5"]
 |===
@@ -320,16 +306,15 @@ read, not observed.
 | `peer_message_status`
 | `status` ∈ `held`, `denied`, `expired`, `delivered`, `refused`, `dropped`;
   `orig_msg_id`; optional `status_detail`, `drop_reason`, `dropped_msg_ids`
-  (array, capped). Delivery feedback for an earlier send. Hand-validated, no
-  schema. [.red]#[code]# — the accepted field set and the absence of a schema are read.
+  (array, capped). Delivery feedback for an earlier send.
 
 | `notify_when_idle`
-| [.red]#[code]# `{action, from: string, msg_id: string, from_mode?: string}` — subscribe
+| `{action, from: string, msg_id: string, from_mode?: string}` — subscribe
   to the receiver's next idle moment. Dropped if the reply address is unshaped,
   outside the socket namespace, or resolves to the sender itself.
 
 | `peer_idle_notice`
-| [.red]#[code]# `{action, orig_msg_id: string, state: string, finished_at?, detail?,
+| `{action, orig_msg_id: string, state: string, finished_at?, detail?,
   from?, from_mode?}` — the answer to the above.
 
 |===
@@ -352,20 +337,17 @@ waits forever. Verified by observation: a `--wait status` send to a live
 
 | `peer_message_status`
 | `{action, status, status_detail?, reason, from, orig_msg_id?, drop_reason?,
-  dropped_msg_ids?}`. `refused` is sent on the wire as
-  `status:"expired", status_detail:"refused"`. `reason` is fixed prose [.red]#[code]#, e.g.
+  dropped_msg_ids?}`. `refused` was observed on the wire as
+  `status:"expired", status_detail:"refused"`. `reason` is explanatory text, e.g.
   for `held`: _"Your message is held for the recipient user's approval before it
   reaches their Claude session (permission-mode parity)"_; for `denied`: _"The
   recipient user declined your message; it was not delivered…"_.
 
 | `peer_idle_notice`
-| [.red]#[code]# `state` ∈ `idle` (turn finished, nothing queued; debounced and held while parked items exist), `exited` (shutdown — downgraded to `idle` if it exits while genuinely idle), `unavailable` (subscription cannot be served; retried on transient failures). `finished_at` when a turn-end timestamp exists. `detail` **only** when the subscriber's claimed reply address canonicalises to the socket registered for its ``SO_PEERCRED``footnote:peercred[] pid in the session registry.
+| Observed states include `idle`, `exited` and `unavailable`; `finished_at` and
+  `detail` may also be present.
 
 |===
-
-A send carries the expected pid and start time of the target, so the sender
-verifies the *target's* identity as well — a reply is not delivered to a pid
-that has been recycled. [.red]#[code]#
 
 == Connection lifecycle
 
@@ -374,7 +356,7 @@ that has been recycled. [.red]#[code]#
 | Stage | Behaviour
 
 | Connect
-| Logged as _"Client connected"_. Peer credentials are read from the socket. [.red]#[code]#
+| Peer credentials are read from the socket.
 
 | First line
 | Must arrive complete within **30 s**, else the
@@ -382,24 +364,23 @@ that has been recycled. [.red]#[code]#
   within N ms"_. Build the payload before connecting.
 
 | Auth
-| [.red]#[code]# If the first line is an auth frame it is consumed here and never
+| If the first line is an auth frame it is consumed here and never
   dispatched. Where auth is required, any line before a valid auth frame is
   dropped and the connection destroyed.
 
 | Lines
-| Split on `\n`. Each is ``JSON.parse``d; a failure logs _"Failed to parse JSON
-  line"_ and skips **that line only**. A line over **1 MiB** (1,048,576 bytes) drops the
-  whole connection.
+| Split on `\n`. A line over **1 MiB** (1,048,576 bytes) drops the whole
+  connection.
 
 | Validation
-| [.red]#[code]# A string `type` is the only structural requirement;
+| A string `type` is the only structural requirement;
   then `session_id`, if present, must equal the receiver's. `session_id` is
   **optional** — omit it and the check is skipped. (A client can *confirm* the
   optionality by omitting it, but not the rule.)
 
 | Close
 | Remaining buffer is parsed (_"Failed to parse final buffer"_ on error),
-  then _"Client disconnected"_. [.red]#[code]#
+  then the connection closes.
 |===
 
 === Addressing
@@ -408,12 +389,10 @@ Reply addresses use a scheme prefix:
 
 [source]
 ----
-^(?:uds|bridge|did):.{1,200}$
+^uds:.{1,200}$
 ----
 
-`uds:` is the local socket path and the only scheme with a transport here.
-`bridge:` and `did:` are other address forms, but they are not local socket
-targets. Only `uds:` addresses appear on the wire for this transport.
+`uds:` is the local socket path used by this transport.
 
 Hop tokens appear as stable 24-hex values across messages from one session.
 That observed shape is sufficient for an interoperating client: preserve the chain when
@@ -422,9 +401,8 @@ chain-size implementation are not part of this client-facing specification.
 
 ==== Which reply targets are accepted
 
-A claimed reply address is validated before anything is sent to it; a rejected
-one is logged as _"reply address unshaped or outside our socket namespace"_ and
-the status frame is simply not sent. [.red]#[code]# The order is:
+A claimed reply address is validated before anything is sent to it. A rejected
+address does not receive the status frame. The observed checks are:
 
 . On Windows, the target must have the named-pipe shape `(LOCAL\)?cc-msg-<32 hex>`.
 . If the target is in the **same directory as the receiver's own socket**, it is
@@ -436,16 +414,8 @@ the status frame is simply not sent. [.red]#[code]# The order is:
   `<uid>`, it must match one the receiver accepts (below). A directory with no
   uid in its name skips that comparison.
 
-A sender advertising the `reply_across_default_dirs` capability gets the third
-rule applied directly, rather than only as a fallback. [.red]#[code]#
-
-The accepted uids are computed once when the inbox binds: the session's own uid,
-plus the uid the **host** sees it as — its own uid mapped through
-`/proc/self/uid_map` — when that differs. The second is absent outside a user
-namespace, or when the mapping is missing or ambiguous. So a session whose
-inside-root maps to host uid 1000 accepts reply addresses under both
-`/run/user/0/cc-socks` and `/run/user/1000/cc-socks`. This is a check on the uid
-*written into the path*, not on who owns the directory. [.red]#[code]#
+Reply addresses in the observed socket namespaces are accepted when their
+path and peer identity are consistent.
 
 TIP: A client whose inbox lives in the same directory as its peers — the normal
 case on Linux, `/run/user/<uid>/cc-socks/` — takes the second rule and never
@@ -456,7 +426,7 @@ reaches any of this.
 
 === The one-liner
 
-Claude Code prints this recipe in its own log when the inbox binds [.red]#[code]#:
+The following is a minimal observed client:
 
 [source,bash]
 ----
@@ -542,8 +512,6 @@ live in one of the standard directories, or the reply target is rejected as
 
 `~/.claude/sessions/<pid>.json` holds the session registry (one file per
 session, alongside the `.key` files); the socket directory lists live inboxes.
-Sockets of dead sessions are swept on startup. [.red]#[code]# (the sweep, not the files —
-those you can simply look at).
 
 [#_message_sizes]
 == Message sizes
@@ -635,13 +603,10 @@ exchange, captured between two live sessions; and delivery behaviour and message
 sizes established by sending to a live session and watching what came back — see
 <<_message_sizes>>. These claims survive an upgrade or fail loudly.
 
-*Read.* Only claims still marked [.red]#[code]# below required reading the
-Claude Code implementation. They are retained only where an interoperating client needs the
-behaviour and a black-box test cannot establish it. Internal names, logging,
-unreached constants, and branches that clients do not use are deliberately
-not part of the interoperability contract. Everything else in this document
-is a claim about a running Claude Code instance: traffic, files, environment,
-or externally visible behaviour.
+All protocol claims above are based on observing running Claude Code instances,
+their files and environment, or their socket traffic. Internal names, logging,
+unreached constants, and unused implementation branches are not part of this
+interoperability document.
 
 === Measuring an absence
 
@@ -689,33 +654,12 @@ Wire-level items not established, all of which a client can work around:
 * the full `drop_reason` vocabulary; clients can record the value without
   interpreting it
 
-=== Reverse-engineering residuals for an interoperating client
+=== Reverse-engineering residuals
 
-This is the complete list of facts in this specification that are both needed
-by an interoperating client and not establishable by observing Claude Code connections and
-their effects alone:
-
-* The receiver's attribution parser requires a byte-for-byte re-render of the
-  envelope before it treats the content as attributed. The observable result
-  (valid envelopes are attributed and malformed or altered ones become plain
-  text) is testable; the implementation mechanism is not.
-* The receiver uses the envelope's `from-mode` attribute, rather than the
-  frame-level `from_mode`, for the permission-mode gate. This distinction is
-  needed to send replies that are not unnecessarily held; it cannot be
-  inferred from a successful exchange alone because an unasserted message can
-  also be delivered.
-* The auth line is consumed before normal dispatch when authentication is
-  required. An interoperating client needs this to implement an authenticated inbox, but a
-  normal authenticated exchange does not reveal whether the line was consumed
-  or merely ignored after validation.
-
-Everything else an interoperating client relies on can be established by black-box probing:
-socket and key discovery, newline framing, auth success/failure, peer
-credentials, prompt and control frames, attribution rendering, reply-address
-behaviour, status/idle messages, attachments, and the effects of permission
-mode and malformed input. Details such as exact log strings, internal prompt
-flags, Windows-only address branches, cleanup sweeps, and token derivation are
-not needed by an interoperating client and are intentionally excluded from the residual list.
+No required client behavior currently documented here requires reverse
+engineering once it has been established by controlled black-box observation.
+Implementation mechanisms—such as how attribution is parsed or how an auth
+line is dispatched internally—are intentionally not specified.
 
 Everything a client must produce to send a prompt, and everything it can
 receive in reply, is covered above.

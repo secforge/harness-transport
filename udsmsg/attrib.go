@@ -1,6 +1,7 @@
 package udsmsg
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 	"unicode"
@@ -30,13 +31,13 @@ import (
 // it closes the attribute early, so the name is silently truncated there.
 // ScrubName removes it to protect the name rather than the envelope.
 
-// MsgVersion is the envelope version a session stamps on a user frame. The
-// receiver never reads it: it is emitted for fidelity, not required.
+// MsgVersion is the envelope version a session stamps on a user frame. What a
+// recipient does with it is not observable from outside, so we send what
+// sessions were seen to send.
 const MsgVersion = 1
 
-// Queue priorities. The receiver passes these three through and normalises
-// everything else — absent, unknown or malformed — to PriorityNext. A bad
-// value never drops a frame.
+// PriorityNext is the queue priority sessions were observed to send. Whether
+// others are accepted, and what they would do, is not observable from here.
 const PriorityNext = "next"
 
 // Element name and the attributes. This order is the one a captured session
@@ -49,8 +50,12 @@ const (
 )
 
 var (
-	// fromRe is the reply address guard applied to the from attribute.
-	fromRe = regexp.MustCompile(`^[A-Za-z0-9%:_/.\\-]{1,300}$`)
+	// fromRe is the guard applied to the from attribute: the characters an
+	// address on this transport is made of, and no more.
+	//
+	// The bound is the operating system's rather than a guess: see
+	// MaxSocketPath, which the scheme and its colon add four to.
+	fromRe = regexp.MustCompile(fmt.Sprintf(`^[A-Za-z0-9:_/.-]{1,%d}$`, len(SchemeUDS)+1+MaxSocketPath))
 )
 
 // CrossSession is the attribution a user frame carries in its own content.

@@ -152,22 +152,6 @@ func TestRoundTripUserFrame(t *testing.T) {
 	}
 }
 
-func TestChildTokenIsAccepted(t *testing.T) {
-	srv, c := testServer(t, Config{ChildToken: "c0ffee"})
-	cl, err := Dial(context.Background(), Target{SocketPath: srv.Path(), Token: "c0ffee"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cl.Close()
-	if _, err := cl.SendUser(User{Text: "hi"}); err != nil {
-		t.Fatal(err)
-	}
-	c.next(t)
-	if p := <-c.peers; !p.Authenticated() {
-		t.Error("a valid child token should authenticate the connection")
-	}
-}
-
 func TestAuthOptionalAcceptsUnauthenticated(t *testing.T) {
 	srv, c := testServer(t, Config{RequireAuth: false})
 	cl, err := Dial(context.Background(), Target{SocketPath: srv.Path(), Unauthenticated: true})
@@ -212,9 +196,9 @@ func TestRequireAuthDestroysConnectionOnBadToken(t *testing.T) {
 }
 
 func TestAuthFrameToleratesExtraFields(t *testing.T) {
-	srv, c := testServer(t, Config{RequireAuth: true, PeerToken: "tok"})
+	srv, c := testServer(t, Config{RequireAuth: true})
 	conn := raw(t, srv.Path(), []byte(
-		`{"type":"auth","token":"tok","novel":true}`+"\n"+
+		`{"type":"auth","token":"`+srv.PeerToken()+`","novel":true}`+"\n"+
 			`{"type":"user","message":{"role":"user","content":"x"}}`+"\n"))
 	defer conn.Close()
 	if f := c.next(t); f.Text() != "x" {
@@ -225,10 +209,10 @@ func TestAuthFrameToleratesExtraFields(t *testing.T) {
 // An auth frame is only an auth frame as the first line; later it is an
 // ordinary unhandled type.
 func TestAuthFrameOnlyCountsFirst(t *testing.T) {
-	srv, c := testServer(t, Config{PeerToken: "tok"})
+	srv, c := testServer(t, Config{})
 	conn := raw(t, srv.Path(), []byte(
 		`{"type":"user","message":{"role":"user","content":"x"}}`+"\n"+
-			`{"type":"auth","token":"tok"}`+"\n"))
+			`{"type":"auth","token":"`+srv.PeerToken()+`"}`+"\n"))
 	defer conn.Close()
 	c.next(t)
 	select {
@@ -238,26 +222,6 @@ func TestAuthFrameOnlyCountsFirst(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("a late auth frame should surface as an unhandled type")
-	}
-}
-
-func TestSessionIDMismatchIsDropped(t *testing.T) {
-	srv, c := testServer(t, Config{SessionID: "mine"})
-	conn := raw(t, srv.Path(), []byte(
-		`{"type":"user","session_id":"theirs","message":{"role":"user","content":"a"}}`+"\n"+
-			`{"type":"user","session_id":"mine","message":{"role":"user","content":"b"}}`+"\n"+
-			`{"type":"user","message":{"role":"user","content":"c"}}`+"\n"))
-	defer conn.Close()
-
-	if err := c.nextDrop(t); !strings.Contains(err.Error(), "session_id mismatch") {
-		t.Errorf("drop reason = %v", err)
-	}
-	// The matching frame and the one with no session_id both get through.
-	if f := c.next(t); f.Text() != "b" {
-		t.Errorf("got %q, want b", f.Text())
-	}
-	if f := c.next(t); f.Text() != "c" {
-		t.Errorf("got %q, want c", f.Text())
 	}
 }
 
@@ -449,7 +413,10 @@ func TestAutoAllocatedPathIsDiscriminated(t *testing.T) {
 		t.Errorf("auto-allocated name %q lacks the discriminator that keeps it "+
 			"distinct from a real session inbox", base)
 	}
-	if _, err := ResolveReplyAddr(srv.Addr()); err != nil {
-		t.Errorf("auto-allocated inbox is not a usable reply address: %v", err)
+	if !ValidAddress(srv.Addr()) {
+		t.Errorf("auto-allocated inbox is not a well-shaped reply address: %q", srv.Addr())
+	}
+	if err := CheckDir(filepath.Dir(srv.Path())); err != nil {
+		t.Errorf("auto-allocated inbox is not in a directory worth connecting to: %v", err)
 	}
 }

@@ -3,7 +3,6 @@ package udsmsg
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -12,10 +11,16 @@ import (
 // SchemeUDS is the only reply-address scheme observed on this transport.
 const SchemeUDS = "uds"
 
+// MaxSocketPath is the longest path a unix socket can have: sun_path is 108
+// bytes and holds a NUL-terminated string. A longer address names a socket
+// nothing could have bound, so both address guards below are built from this
+// rather than from a chosen number.
+const MaxSocketPath = 107
+
 // addrRe is the reply-address shape this package accepts. Observed addresses
 // are uds:, and nothing else is recognised: an address shape accepted here is
 // one this package is willing to resolve and send to.
-var addrRe = regexp.MustCompile(`^uds:.{1,200}$`)
+var addrRe = regexp.MustCompile(fmt.Sprintf(`^%s:.{1,%d}$`, SchemeUDS, MaxSocketPath))
 
 // dialNameRe is what this package will CONNECT TO. It is deliberately wider:
 // refusing to answer an address because its name is unfamiliar costs a reply,
@@ -26,8 +31,8 @@ var addrRe = regexp.MustCompile(`^uds:.{1,200}$`)
 var dialNameRe = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}\.sock$`)
 
 // ValidAddress reports whether addr is a well-shaped reply address. Shape is
-// necessary but not sufficient: a uds: target must also resolve inside one of
-// the standard socket directories, which ResolveReplyAddr checks.
+// necessary and not sufficient: whether the socket it names is one worth
+// connecting to is decided when connecting, by CheckDir on its directory.
 func ValidAddress(addr string) bool { return addrRe.MatchString(addr) }
 
 // UDSAddress formats a socket path as a uds: reply address.
@@ -86,22 +91,4 @@ func CheckDir(dir string) error {
 		return fmt.Errorf("%s is owned by uid %d, want %d or 0", dir, uid, self)
 	}
 	return nil
-}
-
-// ResolveReplyAddr validates a reply address for delivery. A uds: target must
-// live in one of the standard socket directories; the receiver rejects
-// anything else as "outside our socket namespace" unless the sender holds the
-// reply_across_default_dirs capability.
-func ResolveReplyAddr(addr string) (path string, err error) {
-	p, ok := ParseUDS(addr)
-	if !ok {
-		return "", fmt.Errorf("not a well-shaped uds address: %q", addr)
-	}
-	dir := filepath.Dir(p)
-	for _, std := range SocketDirs() {
-		if dir == std {
-			return p, nil
-		}
-	}
-	return "", fmt.Errorf("%s is outside the standard socket directories", p)
 }

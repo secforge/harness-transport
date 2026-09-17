@@ -41,13 +41,12 @@ type UserMessage struct {
 // populated. Unknown fields survive a
 // round trip in Raw, which holds the line exactly as received.
 type Frame struct {
-	MsgV      int    `json:"msgV,omitempty"`
-	Type      string `json:"type"`
-	SessionID string `json:"session_id,omitempty"`
-	MsgID     string `json:"msg_id,omitempty"`
-	From      string `json:"from,omitempty"`
-	FromMode  Mode   `json:"from_mode,omitempty"`
-	Priority  string `json:"priority,omitempty"`
+	MsgV     int    `json:"msgV,omitempty"`
+	Type     string `json:"type"`
+	MsgID    string `json:"msg_id,omitempty"`
+	From     string `json:"from,omitempty"`
+	FromMode Mode   `json:"from_mode,omitempty"`
+	Priority string `json:"priority,omitempty"`
 
 	// type=auth
 	Token string `json:"token,omitempty"`

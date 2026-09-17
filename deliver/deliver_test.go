@@ -255,10 +255,6 @@ func TestTheTwoSizeFiguresAnswerDifferentQuestions(t *testing.T) {
 		t.Errorf("the refusal threshold (%d) must leave room for worst-case escaping under the %d cap",
 			max, udsmsg.MaxLineBytes)
 	}
-	if DemonstratedIntactBytes != 1_000_000 {
-		t.Errorf("DemonstratedIntactBytes = %d; change it only with a new experiment, and update the recorded method",
-			DemonstratedIntactBytes)
-	}
 }
 
 // The floor must hold for content nobody inspected. JSON inflates "<", ">",

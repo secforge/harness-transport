@@ -95,15 +95,19 @@ func TestCheckDir(t *testing.T) {
 	}
 }
 
-func TestResolveReplyAddrRejectsOutsideNamespace(t *testing.T) {
-	if _, err := ResolveReplyAddr("uds:" + filepath.Join(t.TempDir(), "x.sock")); err == nil {
-		t.Error("a socket outside the standard directories should be rejected")
+// Both address guards are bounded by what the operating system can bind, so a
+// socket path at the limit is accepted and one past it is not — in the frame's
+// address and in the envelope's alike.
+func TestAddressBoundsFollowSunPath(t *testing.T) {
+	at := "uds:/" + strings.Repeat("a", MaxSocketPath-1)
+	past := at + "a"
+	if !ValidAddress(at) {
+		t.Errorf("an address with a %d-byte path should be accepted", MaxSocketPath)
 	}
-	in := filepath.Join(SocketDirs()[0], "123.sock")
-	if got, err := ResolveReplyAddr("uds:" + in); err != nil || got != in {
-		t.Errorf("ResolveReplyAddr(standard dir) = %q, %v", got, err)
+	if ValidAddress(past) {
+		t.Errorf("an address longer than sun_path should be refused")
 	}
-	if _, err := ResolveReplyAddr("other:x"); err == nil {
-		t.Error("a non-uds address has no socket path to resolve")
+	if !fromRe.MatchString(at) || fromRe.MatchString(past) {
+		t.Error("the envelope guard should agree with the frame guard on length")
 	}
 }

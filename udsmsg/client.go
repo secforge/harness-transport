@@ -104,8 +104,6 @@ type User struct {
 	// UUID is the injected prompt's uuid. Optional and unvalidated; the
 	// receiver generates one when it is absent.
 	UUID string
-	// SessionID, if set, must match the receiver's or the message is dropped.
-	SessionID string
 	// Attribution, when set, wraps Text so the peer sees a named message with
 	// a reply address instead of an anonymous prompt.
 	Attribution *CrossSession
@@ -156,15 +154,14 @@ func BuildUserFrame(u *User) (*Frame, error) {
 		content = u.Attribution.Wrap(content)
 	}
 	return &Frame{
-		MsgV:      MsgVersion,
-		Type:      TypeUser,
-		MsgID:     u.MsgID,
-		From:      u.From,
-		FromMode:  u.FromMode,
-		Priority:  u.Priority,
-		SessionID: u.SessionID,
-		Message:   &UserMessage{Role: "user", Content: content},
-		UUID:      u.UUID,
+		MsgV:     MsgVersion,
+		Type:     TypeUser,
+		MsgID:    u.MsgID,
+		From:     u.From,
+		FromMode: u.FromMode,
+		Priority: u.Priority,
+		Message:  &UserMessage{Role: "user", Content: content},
+		UUID:     u.UUID,
 	}, nil
 }
 

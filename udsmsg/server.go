@@ -45,16 +45,10 @@ type Config struct {
 	// standard socket directory, named "<pid>-<8 hex>.sock" so it cannot be
 	// mistaken for a real session's inbox.
 	Path string
-	// SessionID, when set, is enforced: a frame carrying a different
-	// session_id is dropped. A frame without one is always accepted.
-	SessionID string
 	// RequireAuth rejects every line from a connection that has not
 	// presented a valid token. The reference implementation leaves this off
 	// by default, accepting unauthenticated frames.
 	RequireAuth bool
-	// PeerToken and ChildToken are the accepted tokens. Generated if empty.
-	PeerToken  string
-	ChildToken string
 	// AllowUnidentifiedPeers accepts connections whose credentials the
 	// kernel will not report — which is every connection on a platform
 	// without SO_PEERCRED or LOCAL_PEERCRED. Off by default: identity here
@@ -74,9 +68,14 @@ type Config struct {
 	ModeSource ModeSource
 	// FirstLineTimeout overrides the deadline for a connection's first
 	// complete line. Zero uses FirstLineTimeout.
+	//
+	// No caller sets this, and it stays anyway: it is the seam that lets the
+	// documented 30-second deadline be exercised without a test waiting 30
+	// seconds. The same is true of Path above. A sweep for unused fields will
+	// find both — they earn their place by making behaviour observable, not
+	// by being called.
 	FirstLineTimeout time.Duration
 	Handler          Handler
-	Logger           *log.Logger
 }
 
 // ModeSource says where an inbox's asserted permission posture comes from.
@@ -108,6 +107,9 @@ type Server struct {
 	// nothing, which is the honest default: a receiver holds only on a
 	// MISMATCH, so a frame that claims no mode is not held.
 	mode Mode
+	// token is the credential this inbox accepts, generated at bind. It is
+	// published only if PublishKey says so, and readable with PeerToken.
+	token string
 
 	mu     sync.Mutex
 	closed bool
@@ -116,12 +118,6 @@ type Server struct {
 
 // Listen binds an inbox and, if configured, publishes its key file.
 func Listen(cfg Config) (*Server, error) {
-	if cfg.PeerToken == "" {
-		cfg.PeerToken = NewToken()
-	}
-	if cfg.ChildToken == "" {
-		cfg.ChildToken = NewToken()
-	}
 	path := cfg.Path
 	if path == "" {
 		p, err := allocSocketPath()
@@ -149,7 +145,7 @@ func Listen(cfg Config) (*Server, error) {
 		ln.Close()
 		return nil, err
 	}
-	s := &Server{cfg: cfg, ln: ln, path: path}
+	s := &Server{cfg: cfg, ln: ln, path: path, token: NewToken()}
 
 	if cfg.ModeSource != ModeSourceNone {
 		m, err := DetectParentMode()
@@ -164,7 +160,7 @@ func Listen(cfg Config) (*Server, error) {
 	}
 
 	if cfg.PublishKey {
-		k := &Key{PeerToken: cfg.PeerToken}
+		k := &Key{PeerToken: s.token}
 		if ps, err := ProcStart(os.Getpid()); err == nil {
 			k.ProcStart = ps
 		}
@@ -229,7 +225,7 @@ func (s *Server) Path() string { return s.path }
 func (s *Server) Addr() string { return UDSAddress(s.path) }
 
 // PeerToken returns the token published for other sessions.
-func (s *Server) PeerToken() string { return s.cfg.PeerToken }
+func (s *Server) PeerToken() string { return s.token }
 
 // Serve accepts connections until the context is cancelled or Close is called.
 func (s *Server) Serve(ctx context.Context) error {
@@ -288,16 +284,16 @@ func (s *Server) Close() error {
 func (s *Server) report(err error) {
 	if s.cfg.Handler.OnError != nil {
 		s.cfg.Handler.OnError(err)
-	} else if s.cfg.Logger != nil {
-		s.cfg.Logger.Printf("udsmsg: %v", err)
+	} else {
+		log.Printf("udsmsg: %v", err)
 	}
 }
 
 func (s *Server) drop(ctx context.Context, p *Peer, line []byte, reason error) {
 	if s.cfg.Handler.OnDrop != nil {
 		s.cfg.Handler.OnDrop(ctx, p, line, reason)
-	} else if s.cfg.Logger != nil {
-		s.cfg.Logger.Printf("udsmsg: dropped a frame: %v", reason)
+	} else {
+		log.Printf("udsmsg: dropped a frame: %v", reason)
 	}
 }
 
@@ -384,11 +380,10 @@ func (s *Server) dispatch(ctx context.Context, peer *Peer, line []byte, isFirst 
 	}
 
 	if isFirst && f.IsAuth() {
-		// Either accepted token authenticates, and the comparison is
-		// constant-time so a wrong token leaks nothing by how long it took.
+		// The comparison is constant-time, so a wrong token leaks nothing by
+		// how long it took to reject.
 		switch {
-		case subtle.ConstantTimeCompare([]byte(f.Token), []byte(s.cfg.PeerToken)) == 1,
-			subtle.ConstantTimeCompare([]byte(f.Token), []byte(s.cfg.ChildToken)) == 1:
+		case subtle.ConstantTimeCompare([]byte(f.Token), []byte(s.token)) == 1:
 			peer.Authed = true
 		default:
 			if s.cfg.RequireAuth {
@@ -403,11 +398,6 @@ func (s *Server) dispatch(ctx context.Context, peer *Peer, line []byte, isFirst 
 	if s.cfg.RequireAuth && !peer.Authenticated() {
 		s.drop(ctx, peer, line, errors.New("dropped a frame from a connection that did not authenticate; closing it"))
 		return connDestroy
-	}
-
-	if s.cfg.SessionID != "" && f.SessionID != "" && f.SessionID != s.cfg.SessionID {
-		s.drop(ctx, peer, line, fmt.Errorf("session_id mismatch (got %s, expected %s)", f.SessionID, s.cfg.SessionID))
-		return connContinue
 	}
 
 	h := &s.cfg.Handler
@@ -453,9 +443,11 @@ func readLine(r *bufio.Reader, max int) (line []byte, complete bool, err error) 
 }
 
 // logf reports something worth knowing that is not a dropped frame or an I/O
-// error. Silent when no Logger is configured.
+// error. It goes to the standard logger: a caller that wants these elsewhere
+// redirects that, and one that wants silence gets it by not hitting the
+// conditions. An earlier version wrote to an optional Logger nobody ever set,
+// which made every line here unreachable — including the one warning that a
+// posture could not be established.
 func (s *Server) logf(format string, args ...any) {
-	if s.cfg.Logger != nil {
-		s.cfg.Logger.Printf("udsmsg: "+format, args...)
-	}
+	log.Printf("udsmsg: "+format, args...)
 }

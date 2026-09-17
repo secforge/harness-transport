@@ -180,75 +180,6 @@ type Deliverer interface {
 	Close() error
 }
 
-// DemonstratedIntactBytes is the largest message observed to arrive whole and
-// be quoted back in full by a receiving model.
-//
-// It is a floor, not a ceiling. It records where an experiment stopped
-// looking, not where the limit is: nothing above it has been shown to fail,
-// and nothing above it has been tested. Do not split a message at this
-// boundary — splitting at a boundary requires having found one.
-//
-// THE NUMBER BELONGS TO A ROUTE, NOT TO A PAIR OF PROCESSES. Quote it only
-// with the route attached, because the same message between the same two
-// machines survives one path and is cut on another:
-//
-//	route                                  observed
-//	udsmsg push into a Claude Code session  1,000,019 bytes intact
-//	MCP pull (hub_wait) into a Codex one    cut at ~1,200 chars once;
-//	                                       2,620 bytes intact later
-//
-// The first is this constant, and it is a measurement: a numbered-checkpoint
-// ladder with sentinels and a nonce, delivered to live Claude Code 2.1.272
-// sessions, each reporting the highest checkpoint it could see and checking
-// for gaps below it — 1, 4, 16, 32, 64, 128, 256 and 512 KB and 1,000,019
-// bytes, every rung intact, no cut at any size (2026-09-15).
-//
-// The second is NOT a measurement and must not be treated as one. It is two
-// single observations that contradict each other on the same route: one
-// message arrived cut at roughly 1,200 characters — confirmed a real cut
-// rather than a display artefact, because another client received that same
-// message whole over the other route — and a later 2,620-byte payload
-// arrived intact, checkpoints and end marker complete. So the cut is not a
-// fixed size limit on that path. The working hypothesis was that it depends
-// on a delivery carrying more than one message rather than on the size of any
-// one of them — tested 2026-09-16 and NOT reproduced: one hub_wait result
-// carrying three events, two of them ~1.2 KB checkpoint payloads, arrived
-// complete with every marker intact. So neither size alone nor batching alone
-// explains the original cut, and it remains unexplained.
-//
-// The two differ by three orders of magnitude, which is the entire reason
-// this comment names routes at all. Recording two figures without saying
-// which route each belongs to would commit the exact error the constant
-// exists to prevent.
-//
-// Two cautions the experiment itself produced. A receiver stops participating
-// long before the transport does: one session went silent after roughly 1.3 MB
-// across several messages, still accepting connections but answering nothing,
-// so capacity to hold is a separate limit from capacity to carry. And a
-// "truncation" at the size you are probing deserves suspicion — one rung came
-// back with a missing sentinel that turned out to have been deleted by the
-// sender, not lost in transit.
-//
-// This number is NOT comparable to a limit measured on any other delivery
-// path. A cut observed on one path says nothing about another: the
-// notification path this was compared against truncates around 500 runes,
-// which is three orders of magnitude lower.
-//
-// It exceeds MaxIntactBytes, and that is expected rather than a contradiction:
-// see that method for why the enforced figure is deliberately lower.
-//
-// IT IS NOT A RECOMMENDED SIZE. "Observed to arrive whole" and "safe to send"
-// are different claims, and the gap between them is the receiver's capacity to
-// keep working afterwards. A message that arrives perfectly still spends a
-// large and permanent fraction of a finite budget that every later message
-// shares, and nothing reports that it did — the send succeeds either way. One
-// receiver in this experiment stopped participating after roughly 1.3 MB
-// across several messages. Size a body by what a receiver can afford to
-// absorb, not by what the wire will carry; a sender choosing how much of a
-// receiver's context to consume is making a decision it has no standing to
-// make.
-const DemonstratedIntactBytes = 1_000_000
-
 // Option configures a Deliverer.
 type Option func(*options)
 
@@ -304,21 +235,6 @@ func WithDetectedMode() Option {
 			o.mode = m
 		}
 	}
-}
-
-// WithAssertedMode asserts this process's permission posture. Prefer
-// WithDetectedMode, which establishes the posture instead of taking it on the
-// caller's word.
-//
-// The posture is a CLAIM rather than a credential: the receiver acts on it and
-// cannot check it, which is why there is no default and why nothing here
-// infers one. udsmsg.ModePrompting is the only value this library will put on
-// the wire, because it is the only one observed on it; a process that cannot
-// establish its posture asserts nothing, which costs a hold at worst. Naming a
-// posture to clear a gate that exists for a user's benefit would be laundering
-// their decision, and a message parked is better than a permission spent.
-func WithAssertedMode(m udsmsg.Mode) Option {
-	return func(o *options) { o.mode = m }
 }
 
 // Open returns a Deliverer for whichever harness launched this process.

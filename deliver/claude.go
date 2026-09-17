@@ -74,10 +74,10 @@ const worstCaseEscape = 6
 //
 // The result is far below what ordinary text achieves: a 1,000,019-byte
 // payload of prose enveloped to 1,014,898 bytes and arrived whole, because
-// barely 1.4% of it needed escaping. That is what DemonstratedIntactBytes
-// records. This one answers a different question — "what may I send without
-// having inspected it" — and a caller sizing a split wants this one. A caller
-// that has the body in hand can ask Fits instead and use the real ceiling.
+// barely 1.4% of it needed escaping. This answers a different question —
+// "what may I send without having inspected it" — and a caller sizing a split
+// wants this one. A caller that has the body in hand can ask Fits instead and
+// use the real ceiling.
 func (c *claudeBackend) MaxIntactBytes() (int, error) {
 	return (udsmsg.MaxLineBytes - claudeOverhead) / worstCaseEscape, nil
 }

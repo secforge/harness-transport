@@ -15,47 +15,32 @@ This page documents the observed wire behavior of **Claude Code 2.1.272**
 (`linux-x64`), not a published protocol specification. See
 <<_provenance_and_caveats>> before relying on it.
 
-TIP: The shortest possible client is one line of shell — see
-<<_writing_a_client>>. Everything else here is detail you only need when that
-line is not enough.
-
-[NOTE]
-====
-Claims in this document are based on observing running Claude Code sessions,
-their files and environment, or their socket traffic. Details that cannot be
-established that way are excluded unless explicitly identified as an
-implementation caveat.
-====
-
-== Overview
-
-[cols="1,4"]
-|===
-| Aspect | Value
-
-| Transport | unix domain socket (Windows: named pipe), one per session
-| Framing | newline-delimited JSON, one object per line
-| Authentication | 128-bit token
-| Identity | the connecting process's pid, taken from the socket — not from what the sender claims
-| Message types | `user` (observed)
-| Direction | bidirectional; replies go to the sender's own socket
-|===
-
 == Transport and discovery
 
 === Socket location
 
-Sockets live in `/run/user/<uid>/cc-socks/`, which must be mode `0700` and owned
-by the caller or root. Claude Code binds `<pid>.sock` there. Not all socket file names are accepted — we bind `<pid>-<8hex>.sock`, which is
-both accepted and free of pid collisions across pid namespaces.
+Socket locations are:
 
-Claude Code exports its socket path as `CLAUDE_CODE_MESSAGING_SOCKET` to child
-processes after the inbox is bound, allowing them to identify their parent
-session.
+* Linux: `/run/user/<uid>/cc-socks/`
+* macOS: `/tmp/cc-socks/`
+* Windows: `\\.\pipe\LOCAL\cc-msg-<32 hex>` named pipes
+
+Unix socket directories are restricted to the user. Claude Code exports the
+socket or pipe address as `CLAUDE_CODE_MESSAGING_SOCKET` to child processes
+after the inbox is bound.
+
+Unix socket filenames are normally `<pid>.sock` or `<pid>-<8hex>.sock`.
+
+=== Wire format
+
+Each frame is a newline-terminated JSON object. A complete final JSON object
+may also be processed when the connection closes without a trailing newline.
+In Claude Code 2.1.272, an incomplete first line times out after **30 seconds**
+and a line over **1 MiB** (1,048,576 bytes) closes the connection.
 
 == Authentication
 
-A session has two tokens, each 32 hex chars, and either one authenticates:
+A Claude code session has two tokens, each 32 hex chars, and either one authenticates:
 
 [cols="1,4"]
 |===
@@ -81,14 +66,12 @@ The 64-hex component is `sha256` of the **canonical socket path** (on Windows,
 of `\\.\pipe\<name>`), which binds a key file to one specific socket — verified by
 recomputing the hash against every sampled file.
 
-Content:
+The file contains the peer token:
 
 [source,json]
 ----
 {
-  "peerToken": "2f6c…",                     // 32 hex chars
-  "procStart": "1162506",                   // /proc/<pid>/stat field 22
-  "pidDomain": "linux:<machine-id>:<target of /proc/self/ns/pid>"   // namespace-qualified pid space
+  "peerToken": "2f6c…"                     // 32 hex chars
 }
 ----
 
@@ -105,42 +88,6 @@ IMPORTANT: In the default configuration the token is not a security boundary —
 the `0700` directory is. Any process running as the same uid can both read the
 key files and connect to the sockets. Treat session sockets as trusted-uid
 surface, not as an authenticated channel.
-
-=== Peer credentials
-
-The intent is that **who you are is not something you get to state**. A sender
-puts an address in `from`, but that is a claim about where replies should go,
-not evidence of identity. The receiver takes identity from the kernel instead —
-the credentials attached to the connection itself
-(``SO_PEERCRED``footnote:peercred[A socket option on unix domain sockets:
-reading it returns the pid, uid and gid of the process on the other end, as
-recorded by the kernel when the connection was made. The values come from the
-kernel rather than from anything sent over the socket, so a peer cannot choose
-or alter them. Linux-specific; other systems have equivalents under different
-names, and on Windows the named-pipe transport uses a different mechanism
-entirely.]), which no sender can forge — and treats the claimed address as something to be
-corroborated against it, using the session registry as the record of which
-socket belongs to which process. A start time is carried alongside the pid so
-that a pid which has since been recycled cannot inherit the identity of the
-process that held it.
-
-The externally visible consequence is that the `from` field does not determine
-the connecting process's kernel identity. A mismatched or unverifiable address
-may still allow basic delivery, but responses that depend on validating the
-return address can omit fields such as `detail` on an idle notice. The exact
-validation rules are described below and were established by controlled
-black-box tests.
-
-A frame carrying a `session_id` different from the receiver's is dropped;
-omitting `session_id` does not trigger this check.
-
-== Wire format
-
-* Each frame is a newline-terminated JSON object. A final complete JSON object
-  may still be processed when the connection closes without a trailing newline.
-* In Claude Code 2.1.272, a connection that sends no complete line within
-  **30 seconds** is disconnected and a line exceeding **1 MiB** (1,048,576 bytes) closes the
-  connection.
 
 == Message types
 
@@ -212,7 +159,7 @@ Injects a prompt into the receiving session's queue.
 | `message.role` | Claude Code sessions observed here send `"user"`.
 | `message.content` | The prompt text. See below.
 | `priority` | Claude Code sessions observed here send `"next"`.
-| `from` | Reply address, `uds:<socket path>` (see <<_addressing>>). This is the address the receiver trusts, independent of the one inside the attribution envelope.
+| `from` | Reply address, `uds:<socket path>`. This is the address the receiver trusts, independent of the one inside the attribution envelope.
 |===
 
 The `message.content` envelope contains:
@@ -225,79 +172,6 @@ The `message.content` envelope contains:
 | `from-name` | A display name carried in the envelope; observed names are plain text with the envelope delimiters absent.
 | `from-mode` | Claude Code sessions observed here send `"prompting"`.
 |===
-
-== Connection lifecycle
-
-[cols="1,4"]
-|===
-| Stage | Behaviour
-
-| Connect
-| Peer credentials are read from the socket.
-
-| First line
-| Must arrive complete within **30 s**, else the
-  connection is closed: _"Closing a connection that sent no complete line
-  within N ms"_. Build the payload before connecting.
-
-| Auth
-| If the first line is an auth frame it is consumed here and never
-  dispatched. Where auth is required, any line before a valid auth frame is
-  dropped and the connection destroyed.
-
-| Lines
-| Split on `\n`. A line over **1 MiB** (1,048,576 bytes) drops the whole
-  connection.
-
-| Validation
-| A string `type` is the only structural requirement;
-  then `session_id`, if present, must equal the receiver's. `session_id` is
-  **optional** — omit it and the check is skipped. (A client can *confirm* the
-  optionality by omitting it, but not the rule.)
-
-| Close
-| Remaining buffer is parsed (_"Failed to parse final buffer"_ on error),
-  then the connection closes.
-|===
-
-=== Addressing
-
-Reply addresses use a scheme prefix:
-
-[source]
-----
-^uds:.{1,200}$
-----
-
-`uds:` is the local socket path used by this transport.
-
-Hop tokens appear as stable 24-hex values across messages from one session.
-That observed shape is sufficient for an interoperating client: preserve the chain when
-relaying, or leave it empty when not relaying. The derivation, rotation and
-chain-size implementation are not part of this client-facing specification.
-
-==== Which reply targets are accepted
-
-A claimed reply address is validated before anything is sent to it. A rejected
-address does not receive the status frame. The observed checks are:
-
-. On Windows, the target must have the named-pipe shape `(LOCAL\)?cc-msg-<32 hex>`.
-. If the target is in the **same directory as the receiver's own socket**, it is
-  accepted for ending in `.sock` — no further checks.
-. Otherwise a verified peer pid is required, the file name must match
-  `^(\d+(-[0-9a-f]{8})?|[0-9a-f]{1,16})\.sock$`, and the directory must be one of
-  `/tmp/cc-socks[-<uid>]`, `/private/tmp/cc-socks[-<uid>]`,
-  `/run/user/<uid>/cc-socks` or the Termux equivalent. Where that path carries a
-  `<uid>`, it must match one the receiver accepts (below). A directory with no
-  uid in its name skips that comparison.
-
-Reply addresses in the observed socket namespaces are accepted when their
-path and peer identity are consistent.
-
-TIP: A client whose inbox lives in the same directory as its peers — the normal
-case on Linux, `/run/user/<uid>/cc-socks/` — takes the second rule and never
-reaches any of this.
-
 
 [#_provenance_and_caveats]
 == Provenance and caveats

@@ -198,27 +198,30 @@ func TestObservationStrings(t *testing.T) {
 	}
 }
 
-// A Codex shell-tool child is told its thread at exec, the same way a Claude
-// child is told its socket. Such a process is not an MCP server and will never
-// see tool-call metadata, so it must be served without Adopt.
-func TestCodexShellChildIsServedFromTheEnvironment(t *testing.T) {
+// CODEX_THREAD_ID is ignored, whatever it holds. codex-rs injects it into
+// shell tool environments but nothing in its MCP server does, so a value seen
+// here came from somewhere that never chose this process as a target —
+// latching it would deliver into someone else's thread and look successful.
+func TestCodexIgnoresTheThreadEnvironmentVariable(t *testing.T) {
 	t.Setenv(EnvClaudeSocket, "")
-	t.Setenv(EnvCodexThread, "01a0-from-env")
+	t.Setenv("CODEX_THREAD_ID", "01a0-from-somewhere-else")
 
 	d, ok := Open().(*codexBackend)
 	if !ok {
 		t.Fatal("with no Claude socket the Codex backend should be selected")
 	}
-	if d.thread != "01a0-from-env" {
-		t.Errorf("thread = %q, want it latched from %s", d.thread, EnvCodexThread)
+	if d.thread != "" {
+		t.Errorf("thread = %q; nothing in the environment may supply one", d.thread)
 	}
-	// Still latch-once: the environment does not get a special exemption
-	// from the rule that a second thread disables delivery.
-	if err := d.Adopt(map[string]any{"threadId": "somebody-else"}); err == nil {
-		t.Error("a thread from tool metadata must not override the one from the environment")
+	if ok, reason := d.Available(); ok {
+		t.Errorf("an un-adopted backend must report itself unavailable, said: %s", reason)
 	}
-	if ok, _ := d.Available(); ok {
-		t.Error("after a mismatch the backend must be unavailable")
+	// Adopt remains the only way in, and still works.
+	if err := d.Adopt(map[string]any{"threadId": "01a0-from-metadata"}); err != nil {
+		t.Fatalf("Adopt: %v", err)
+	}
+	if d.thread != "01a0-from-metadata" {
+		t.Errorf("thread = %q, want the one from tool metadata", d.thread)
 	}
 }
 
@@ -226,7 +229,7 @@ func TestCodexShellChildIsServedFromTheEnvironment(t *testing.T) {
 // must say so rather than looking for a session to talk to.
 func TestProcessWithNoHarnessHasNoTarget(t *testing.T) {
 	t.Setenv(EnvClaudeSocket, "")
-	t.Setenv(EnvCodexThread, "")
+	t.Setenv("CODEX_THREAD_ID", "")
 	t.Setenv("CODEX_HOME", t.TempDir())
 
 	ok, reason := Open().Available()
@@ -298,13 +301,12 @@ func TestFitsAllowsFarMoreProseThanTheFloor(t *testing.T) {
 	}
 }
 
-// A guard that clears one backend's variables leaves the other backend live.
-// This is the whole reason the helper belongs in this package: the list of
-// what to clear is the list of what is read.
+// The list of what to clear is the list of what is read, which is why the
+// helper belongs in this package rather than in each caller: a guard written
+// elsewhere goes stale the moment a backend learns or forgets a variable.
 func TestClearEnvForTestingCoversEveryBackend(t *testing.T) {
 	t.Setenv(EnvClaudeSocket, "/run/user/0/cc-socks/4242.sock")
 	t.Setenv(EnvClaudeToken, "cafebabe")
-	t.Setenv(EnvCodexThread, "01a0-live-thread")
 
 	restore := ClearEnvForTesting()
 	for _, k := range harnessEnv {
@@ -312,14 +314,8 @@ func TestClearEnvForTestingCoversEveryBackend(t *testing.T) {
 			t.Errorf("%s survived as %q; a delivery path would still find a harness", k, v)
 		}
 	}
-	// With nothing inherited, the Codex backend must not have latched a
-	// target from the environment either.
-	if c, ok := Open().(*codexBackend); ok && c.thread != "" {
-		t.Errorf("Codex target %q latched despite a cleared environment", c.thread)
-	}
-
 	restore()
-	if os.Getenv(EnvClaudeSocket) != "/run/user/0/cc-socks/4242.sock" || os.Getenv(EnvCodexThread) != "01a0-live-thread" {
+	if os.Getenv(EnvClaudeSocket) != "/run/user/0/cc-socks/4242.sock" {
 		t.Error("restore did not put the environment back")
 	}
 }

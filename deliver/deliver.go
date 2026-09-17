@@ -253,14 +253,19 @@ func Open(opts ...Option) Deliverer {
 	if sock := os.Getenv(EnvClaudeSocket); sock != "" {
 		return newClaude(sock, os.Getenv(EnvClaudeToken), o.senderName, o.replyAddress, o.mode)
 	}
-	c := newCodex(o.senderName)
-	// A shell-tool child of a Codex harness is told its thread at exec, the
-	// same way a Claude child is told its socket. Latch it: such a process is
-	// not an MCP server and will never see tool-call metadata to adopt.
-	if thread := os.Getenv(EnvCodexThread); thread != "" {
-		_ = c.Adopt(map[string]any{metaThreadID: thread})
-	}
-	return c
+	// Deliberately no environment channel for Codex. CODEX_THREAD_ID is real
+	// — codex-rs injects it into SHELL TOOL environments (protocol/src/
+	// shell_environment.rs, core/src/tasks/user_shell.rs at rust-v0.154.0) —
+	// but nothing in codex-rs/mcp-server sets it, so an MCP server never
+	// receives one from its harness. A value found there came from somewhere
+	// else: a stale export, a parent process, another agent on the same box.
+	// Latching it would deliver into a thread this process was never given,
+	// and would look like it had worked.
+	//
+	// The target therefore comes only from Adopt, which reads the threadId the
+	// harness stamps into each request. Until then the backend reports itself
+	// unavailable, which is the honest state and the one that fails closed.
+	return newCodex(o.senderName)
 }
 
 // Environment a Claude Code harness session hands its children.
@@ -310,7 +315,7 @@ func ClearEnvForTesting() func() {
 
 // harnessEnv is every variable Open consults. Adding a backend means adding
 // its variables here, in the same package, next to the code that reads them.
-var harnessEnv = []string{EnvClaudeSocket, EnvClaudeToken, EnvCodexThread, EnvCodexSession}
+var harnessEnv = []string{EnvClaudeSocket, EnvClaudeToken, EnvCodexSession}
 
 // metaThreadID is the key the Codex harness stamps into each MCP request's _meta.
 const metaThreadID = "threadId"
@@ -320,8 +325,6 @@ const metaThreadID = "threadId"
 // hook or a spawned command does, so a child that is not an MCP server can be
 // served without Adopt ever being called.
 const (
-	// EnvCodexThread holds the thread the harness is running.
-	EnvCodexThread = "CODEX_THREAD_ID"
 	// EnvCodexSession holds the harness's root session id.
 	EnvCodexSession = "CODEX_SESSION_ID"
 )

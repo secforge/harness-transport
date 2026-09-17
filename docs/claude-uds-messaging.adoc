@@ -9,7 +9,7 @@ sockets. This document calls the observed transport `uds-messaging` (`UDS`
 means Unix domain socket). Claude's official
 https://code.claude.com/docs/en/cross-session-messaging[Cross-session messaging]
 documentation uses `uds:` for local session addresses. The transport backs
-cross-session messaging and idle notifications.
+cross-session messaging.
 
 This page documents the observed wire behavior of **Claude Code 2.1.272**
 (`linux-x64`), not a published protocol specification. See
@@ -37,7 +37,7 @@ implementation caveat.
 | Framing | newline-delimited JSON, one object per line
 | Authentication | 128-bit token
 | Identity | the connecting process's pid, taken from the socket — not from what the sender claims
-| Message types | `user`, `control` (observed)
+| Message types | `user` (observed)
 | Direction | bidirectional; replies go to the sender's own socket
 |===
 
@@ -92,50 +92,6 @@ Content:
 }
 ----
 
-=== The auth line
-
-Whether a receiver requires authentication is described in
-<<_when_authentication_is_required,When authentication is required>>. When it
-does, the first line of a connection must be an auth frame; when it does not,
-the first line may be an auth frame.
-
-[source,json]
-----
-{"type":"auth","token":"<32 hex chars>"}
-----
-
-A line
-counts as an auth frame if it is an object whose `type` is `auth`, so extra
-fields are tolerated. A connection whose token matches
-`CLAUDE_CODE_MESSAGING_TOKEN` is accepted as a child-process connection; a
-connection whose token matches the `peerToken` from the key file is accepted
-as a same-user peer connection. Both are accepted; anything else leaves the
-connection unauthenticated.
-
-[cols="2,4"]
-|===
-| Situation | Behaviour
-
-| Valid token
-| Connection authenticated; subsequent lines are processed.
-
-| Auth is required and authentication is absent or invalid
-| The unauthenticated frame is dropped and the connection is destroyed. The
-  client sees only an abrupt close with no protocol response.
-  Not seen here — auth is optional on Linux and there is no setting to turn it
-  on — but it is the default on Windows, so a Windows host reaches this on any
-  unauthenticated connection.
-
-| Auth is not required and no auth frame is sent
-| Subsequent lines are **accepted** as unauthenticated. This is the state when
-  the key file could not be published: _"peers will send unauthenticated
-  (accepted: auth is optional on this platform)"_.
-
-| Auth is not required and the auth token is wrong
-| The invalid auth frame itself is dropped, but the connection remains open;
-  subsequent lines are accepted as unauthenticated.
-|===
-
 [[when_authentication_is_required]]
 === When authentication is required
 
@@ -188,9 +144,39 @@ omitting `session_id` does not trigger this check.
 
 == Message types
 
-Only two frame types were observed in the monitored sessions: `user` and
-`control`. This does not establish which additional types a receiver might
-accept.
+The monitored sessions exchanged `auth` and `user` frames.
+
+=== `auth`
+
+Whether a receiver requires authentication is described in
+<<_when_authentication_is_required,When authentication is required>>. When
+used, the first line is an authentication frame:
+
+[source,json]
+----
+{"type":"auth","token":"<32 hex chars>"}
+----
+
+The token may be the inherited `CLAUDE_CODE_MESSAGING_TOKEN` or the
+`peerToken` published in the key file.
+
+[cols="2,4"]
+|===
+| Situation | Behaviour
+
+| Valid token
+| The connection is authenticated and subsequent lines are processed.
+
+| Authentication required, but absent or invalid
+| The frame is dropped and the connection is closed.
+
+| Authentication optional and absent
+| Subsequent lines are accepted as unauthenticated.
+
+| Authentication optional and invalid
+| The auth frame is dropped; the connection remains open and subsequent lines
+  are accepted as unauthenticated.
+|===
 
 === `user`
 
@@ -221,15 +207,15 @@ Injects a prompt into the receiving session's queue.
 | Field | Meaning
 
 | `msgV` | Envelope version; sessions observed here send `1`.
-| `msg_id` | Sender-assigned RFC-4122 UUID used to correlate status and idle notices.
-| `type` | `user`
+| `msg_id` | Sender-assigned RFC-4122 UUID.
+| `type` | `"user"`
 | `message.role` | Claude Code sessions observed here send `"user"`.
-| `message.content` | The prompt text. Missing or non-string content is ignored.
+| `message.content` | The prompt text. See below.
 | `priority` | Claude Code sessions observed here send `"next"`.
 | `from` | Reply address, `uds:<socket path>` (see <<_addressing>>). This is the address the receiver trusts, independent of the one inside the attribution envelope.
 |===
 
-The cross-session-message contains:
+The `message.content` envelope contains:
 
 [cols="2,4"]
 |===
@@ -237,116 +223,7 @@ The cross-session-message contains:
 
 | `from` | An address-shaped value; observed examples use `uds:<socket path>`.
 | `from-name` | A display name carried in the envelope; observed names are plain text with the envelope delimiters absent.
-| `from-mode` | Exactly `bypass` or `prompting`.
-|===
-
-
-`from_mode` on the frame is *not* the value the hold decision reads, and the
- distinction cost several sessions an hour. The receiver builds
-its attribution data by parsing the **attribution envelope inside
-`message.content`**, and gates on the `from-mode` attribute it finds there;
-the frame-level field belongs to a different lane, described as the posture
-declared by a host injecting a message on local stdin. A client that sets the
-frame field and not the envelope attribute asserts nothing the gate will see.
-
-Two things follow, and the second is the trap. Because the envelope is only
-honoured when it round-trips byte for byte (see <<_attribution_envelope>>),
-an asserted mode is **silently discarded** by any mismatch — so a message
-relayed through something that rebuilds, re-wraps or nests the envelope
-arrives with no posture at all and no error anywhere. Anything forwarding
-these messages should pass the envelope through untouched or strip it
-deliberately, never reconstruct it.
-
-The posture itself is the one value here a sender is tempted to get wrong on
-purpose. The receiver holds a message whose asserted mode differs from its
-own, lets a matching one through, and cannot check either way — so the
-posture that clears the gate is always available to anyone willing to state
-it. Where the gate exists for a user's decision, stating it is spending that
-decision on their behalf.
-
-An interoperating client should derive the posture from the spawning session's
-launch configuration and refuse to guess when it cannot tell. A caller that
-explicitly supplies a posture is making an unverifiable claim. Leaving the
-posture unset is the safe failure: a frame with no `from_mode` is held only by
-a `bypass` receiver, never by a prompting one.
-
-Both derivations read *launch* flags, so a mode changed mid-session is
-invisible. That error runs toward a hold, not through one.
-
-The injected content is handled as a cross-session prompt: it does not invoke
-the receiver's slash-command or attachment-processing paths. The observable
-restriction matters to a client; Claude's internal implementation names do not.
-
-
-A closing tag inside the body must not be introduced by a relay that rebuilds the envelope.
-
-IMPORTANT: The receiver accepts an attribution envelope only when it round-trips
-exactly; otherwise the content is treated as plain text. A malformed envelope
-silently loses attribution. Attribute order, the single spaces, and the newline
-after the open tag and before the close tag are therefore all load-bearing.
-
-=== `control`
-
-[source,json]
-----
-{"type":"control","action":"rename","name":"new-session-name"}
-----
-
-The monitored sessions exchanged `peer_message_status` and
-`peer_idle_notice` frames. The other actions below are documented from
-messages observed in controlled tests.
-
-[cols="2,5"]
-|===
-| `action` | Frame
-
-| `rename`
-| `name` (string, required) — renames the receiving session.
-
-| `peer_message_status`
-| `status` ∈ `held`, `denied`, `expired`, `delivered`, `refused`, `dropped`;
-  `orig_msg_id`; optional `status_detail`, `drop_reason`, `dropped_msg_ids`
-  (array, capped). Delivery feedback for an earlier send.
-
-| `notify_when_idle`
-| `{action, from: string, msg_id: string, from_mode?: string}` — subscribe
-  to the receiver's next idle moment. Dropped if the reply address is unshaped,
-  outside the socket namespace, or resolves to the sender itself.
-
-| `peer_idle_notice`
-| `{action, orig_msg_id: string, state: string, finished_at?, detail?,
-  from?, from_mode?}` — the answer to the above.
-
-|===
-
-=== Frames the session sends back
-
-A session emits two frame kinds to a peer's inbox.
-
-IMPORTANT: `peer_message_status` is emitted from the **hold-receipt** path
-only — `held`, `denied`, and `delivered` once an approval goes through (the
-sender's own handler for `delivered` is guarded by `wasHeld`). An ordinary
-message from a same-permission-mode peer is accepted and injected with no
-status frame at all, so a client that waits for `delivered` on the normal path
-waits forever. Verified by observation: a `--wait status` send to a live
-2.1.272 session was injected and reported nothing, timing out.
-
-[cols="2,5"]
-|===
-| Frame | Fields
-
-| `peer_message_status`
-| `{action, status, status_detail?, reason, from, orig_msg_id?, drop_reason?,
-  dropped_msg_ids?}`. `refused` was observed on the wire as
-  `status:"expired", status_detail:"refused"`. `reason` is explanatory text, e.g.
-  for `held`: _"Your message is held for the recipient user's approval before it
-  reaches their Claude session (permission-mode parity)"_; for `denied`: _"The
-  recipient user declined your message; it was not delivered…"_.
-
-| `peer_idle_notice`
-| Observed states include `idle`, `exited` and `unavailable`; `finished_at` and
-  `detail` may also be present.
-
+| `from-mode` | Claude Code sessions observed here send `"prompting"`.
 |===
 
 == Connection lifecycle
@@ -421,174 +298,6 @@ TIP: A client whose inbox lives in the same directory as its peers — the norma
 case on Linux, `/run/user/<uid>/cc-socks/` — takes the second rule and never
 reaches any of this.
 
-[#_writing_a_client]
-== Writing a client
-
-=== The one-liner
-
-The following is a minimal observed client:
-
-[source,bash]
-----
-{ echo '{"type":"auth","token":"'"$CLAUDE_CODE_MESSAGING_TOKEN"'"}'
-  echo '{"type":"user","message":{"role":"user","content":"hello"}}'
-} | socat - UNIX-CONNECT:/run/user/0/cc-socks/<pid>.sock
-----
-
-With auth optional (the default), the first line can be omitted entirely:
-
-[source,bash]
-----
-echo '{"type":"user","message":{"role":"user","content":"status?"}}' \
-  | socat - UNIX-CONNECT:/run/user/0/cc-socks/5543.sock
-----
-
-NOTE: Send the whole line at once. A connection that dribbles bytes without
-completing a line inside 30 s is closed — build the payload first
-(`out=$(cmd); printf '%s\n' "$out" | …`).
-
-=== A client that authenticates
-
-IMPORTANT: Send the auth frame unconditionally, even where auth is optional.
-It is required by default on Windows, the default follows the platform with no
-setting to change it, and a client that omits it there is dropped with no wire
-diagnostic at all — just an abrupt close. Where auth is off the frame is
-accepted and costs one line.
-
-The sample below still treats the key file as optional, because a third-party
-client cannot always read one; prefer the child token
-(`CLAUDE_CODE_MESSAGING_TOKEN`) whenever the target is the session that spawned
-you.
-
-[source,python]
-----
-#!/usr/bin/env python3
-"""Send a prompt to a running Claude Code session on this machine."""
-import hashlib, json, os, socket, sys, glob
-
-def session_socket(pid):
-    for d in (f"/run/user/{os.getuid()}/cc-socks", f"/tmp/cc-socks-{os.getuid()}", "/tmp/cc-socks"):
-        p = f"{d}/{pid}.sock"
-        if os.path.exists(p):
-            return p
-    raise SystemExit(f"no socket for pid {pid}")
-
-def peer_token(sock_path, pid):
-    """Read the peerToken the session published for exactly this socket."""
-    name = f"{pid}.{hashlib.sha256(os.path.realpath(sock_path).encode()).hexdigest()}.key"
-    path = os.path.expanduser(f"~/.claude/sessions/{name}")
-    if not os.path.exists(path):
-        return None                      # auth is optional by default
-    with open(path) as fh:
-        return json.load(fh)["peerToken"]
-
-def send(pid, text):
-    sp = session_socket(pid)
-    tok = peer_token(sp, pid)
-    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    s.connect(sp)
-    lines = []
-    if tok:
-        lines.append({"type": "auth", "token": tok})
-    lines.append({"type": "user", "message": {"role": "user", "content": text}})
-    s.sendall("".join(json.dumps(l) + "\n" for l in lines).encode())
-    s.close()
-
-if __name__ == "__main__":
-    send(int(sys.argv[1]), sys.argv[2])
-----
-
-=== Receiving replies
-
-A `user` message is fire-and-forget: the receiver queues it as a prompt and
-answers in its own transcript, not on your connection. To get feedback you must
-run an inbox of your own and set `from` to `uds:<your socket>`; the receiver
-then sends `control`/`peer_message_status` frames and, if you subscribed with
-`notify_when_idle`, a `peer_idle_notice` when it goes idle. Your socket has to
-live in one of the standard directories, or the reply target is rejected as
-"outside our socket namespace".
-
-=== Finding sessions
-
-`~/.claude/sessions/<pid>.json` holds the session registry (one file per
-session, alongside the `.key` files); the socket directory lists live inboxes.
-
-[#_message_sizes]
-== Message sizes
-
-The wire caps a line at 1 MiB (envelope included) and drops the whole
-connection over it. That is the transport's limit; it is not the same question
-as how much of a message reaches the model, and the two can differ by orders of
-magnitude — a transport that carries bytes perfectly into a display that cuts
-them looks identical to one that never received them.
-
-Measured from the receiving end, by sending numbered-checkpoint payloads with
-sentinels and a nonce and asking the receiving session to report the highest
-checkpoint it could see:
-
-[cols="1,1,3"]
-|===
-| Nominal | On the wire | Result
-
-| 1 KB | 1,087 | intact, 15/15 checkpoints
-| 4 KB | 4,097 | intact, 58/58
-| 16 KB | 16,419 | intact, 234/234
-| 32 KB | 32,799 | intact, 468/468
-| 64 KB | 65,559 | intact, 936/936
-| 128 KB | 131,081 | intact, 1872/1872
-| 256 KB | 262,191 | intact, 3745/3745
-| 512 KB | 524,341 | intact, 7490/7490
-| ~1 MB | 1,000,019 | intact, 14225/14225 — enveloped to 1,014,898, inside the cap
-|===
-
-No cut was found at any size. The largest rung enveloped to 1,014,898 bytes
-against the 1 MiB line cap, so the practical ceiling for ordinary text is the
-cap itself. Quote-dense content reaches it sooner: escaping can double the
-payload, and it is the enveloped line that is measured.
-
-Checkpoints were checked for gaps as well as for the highest number, since a
-dropped line in the middle and a cut at the end are different failures and only
-one of them lowers the maximum.
-
-IMPORTANT: These are **demonstrated sizes, not a located ceiling**. No cut was
-found anywhere, which is not the same as nothing being able to fail. Reasoning
-from an absence of failures to a property of the system is how a client ends up
-splitting at a boundary nobody established.
-
-=== The limit that actually binds
-
-A receiver stops participating long before the transport does.
-
-One session in this experiment absorbed roughly 1.3 MB across several messages
-and then went silent: it still accepted connections, and it answered nothing —
-not the next large message, not a 1 KB ping afterwards. Alive at the socket,
-gone as a participant, and indistinguishable from a slow reply until it does
-not end.
-
-This failure is invisible from the sending side, because every send succeeded.
-No delivery receipt can report it either: an acknowledgement says the message
-was taken, not that the receiver is still able to think. And unlike a
-truncation, the cost is cumulative and shared — a large message that arrives
-perfectly still spends a permanent fraction of a budget every later message
-draws on.
-
-The evidence does not yet separate two explanations. One receiver died after
-1.29 MB across four messages; another survived 1.00 MB in one. That is
-consistent with a total-volume ceiling and equally consistent with the fourth
-message simply being the one that landed on it — two data points cannot tell
-them apart, and this document does not pick the tidier reading.
-
-The experiment that would settle it, recorded so nobody has to re-derive it:
-give one fresh receiver 4 × 320 KB and another 1 × 1.28 MB — same total,
-different message counts. If only the first stops, the cost is per-message
-overhead; if both stop, it is volume; if neither, the timing in the original
-run was coincidence.
-
-So "how large may one message be" is the wrong question to size a client by.
-The number to budget against is how much a receiver can absorb in total, and a
-sender choosing how much of a receiver's context to consume is making a
-decision it has no standing to make. Carry small bodies; leave the rest behind
-an anchor the receiver can fetch if it judges the content worth the budget.
 
 [#_provenance_and_caveats]
 == Provenance and caveats
@@ -600,69 +309,13 @@ from two different kinds of evidence — and they do not carry equal weight:
 the socket path, recomputed and matched against every sampled file) and
 key-file contents, read off a development host; the frames sessions actually
 exchange, captured between two live sessions; and delivery behaviour and message
-sizes established by sending to a live session and watching what came back — see
-<<_message_sizes>>. These claims survive an upgrade or fail loudly.
+sizes established by sending to a live session and watching what came back. These claims survive an upgrade or fail loudly.
 
 All protocol claims above are based on observing running Claude Code instances,
 their files and environment, or their socket traffic. Internal names, logging,
 unreached constants, and unused implementation branches are not part of this
 interoperability document.
 
-=== Measuring an absence
-
-Several of the behaviours above are only observable as something *not*
-happening — a message not held, a status not sent, a notice not arriving. That
-makes them easy to measure wrongly, and one trap is worth naming because it
-has caught every session that went looking.
-
-The approval notice for a held cross-session message is **asynchronous**. The
-send returns first, and the notice follows seconds later. So a test that sends,
-sees no notice, and concludes "not held" has measured latency, not behaviour —
-the correct reading of no notice yet is *not yet*.
-
-The converse trap is worse, because the notice can appear when nothing was
-held. A session emits `peer_message_status` **only on the hold path** — `held`,
-then `denied` or `delivered` once the user answers. An ordinary accepted
-message is reported on by nobody. A sender therefore treats a bare `delivered`
-as the end of a hold it may never have seen the start of, and renders it as
-_"approved and released after approval"_.
-
-So an inbox that acknowledges every accepted frame with `delivered` — which is
-friendlier than silence, and tempting for exactly that reason — makes every
-message sent to it look like one its user had to approve. The symptom is an
-approval notice with no approval, no hold and no permission gate anywhere near
-it, on a path where the receiver has no approval surface at all. Acknowledging
-everything is more talkative than a session, not a faithful imitation of one.
-Reserve `delivered` for a real hold that was approved.
-
-Three sessions each published that conclusion within an hour, and each had to
-retract it; in two cases the retraction crossed with somebody building further
-work on the wrong result. If a test's negative result is an absence, give it a
-bounded wait before the absence means anything, and say what the bound was when
-reporting it.
-
-The same shape applies to the parity check in <<_user>>: because a matching
-mode and an unasserted mode both usually result in delivery, a message getting
-through establishes very little about `from_mode`. What discriminates is a
-receiver in `bypass`, which holds an unasserted frame and accepts a matching
-one.
-
-=== Known gaps
-
-Wire-level items not established, all of which a client can work around:
-
-* the full `drop_reason` vocabulary; clients can record the value without
-  interpreting it
-
-=== Reverse-engineering residuals
-
-No required client behavior currently documented here requires reverse
-engineering once it has been established by controlled black-box observation.
-Implementation mechanisms—such as how attribution is parsed or how an auth
-line is dispatched internally—are intentionally not specified.
-
-Everything a client must produce to send a prompt, and everything it can
-receive in reply, is covered above.
 
 WARNING: This is an internal protocol. Anthropic documents the *features*
 (cross-session messaging, agents) but not this wire format, and nothing
@@ -677,5 +330,3 @@ it controls.
 == See also
 
 * https://code.claude.com/docs/en/cross-session-messaging[Claude Code: Cross-session messaging] — official feature documentation; it describes the feature and `uds:` local addresses, but not this wire format.
-* xref:claude-session.adoc[`c` — starting and resuming sessions]
-* xref:claude-move.adoc[`claude-move` — relocating a project's Claude state]

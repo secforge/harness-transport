@@ -91,7 +91,7 @@ func (c *claudeBackend) Fits(d Delivery) (bool, int, error) {
 	size, fits, err := udsmsg.EncodedUserSize(udsmsg.User{
 		Text:        compose(d),
 		From:        c.replyTo,
-		Attribution: &udsmsg.CrossSession{From: c.replyTo, Name: name, Mode: udsmsg.ModePrompting},
+		Attribution: &udsmsg.CrossSession{From: c.replyTo, Name: name, Mode: c.mode},
 	})
 	return fits, size, err
 }

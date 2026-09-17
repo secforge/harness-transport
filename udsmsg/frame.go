@@ -1,5 +1,5 @@
-// Package udsmsg implements the Claude Code session-to-session messaging
-// protocol (`uds-messaging`): newline-delimited JSON frames over a unix
+// Package udsmsg implements the observed Claude Code session-to-session
+// messaging protocol, called `uds-messaging` here: newline-delimited JSON frames over a Unix
 // domain socket, one socket per session.
 //
 // The protocol is undocumented by Anthropic and can change in any release.
@@ -106,9 +106,17 @@ type Frame struct {
 	Name string `json:"name,omitempty"`
 
 	// action=peer_message_status
-	Status        string   `json:"status,omitempty"`
-	StatusDetail  string   `json:"status_detail,omitempty"`
-	Reason        string   `json:"reason,omitempty"`
+	Status       string `json:"status,omitempty"`
+	StatusDetail string `json:"status_detail,omitempty"`
+	Reason       string `json:"reason,omitempty"`
+	// Cause names the branch that produced a held status, where Reason is
+	// only the fixed prose shown to a user. It is the field that says WHY,
+	// and the difference matters: a hold blamed on permission-mode parity
+	// and one caused by a setting delivered remotely carry identical prose.
+	// Reported values include mode-mismatch, no-mode-asserted, bypass-default,
+	// mode-unknown, and explicit-, managed-, repo- and invalid-setting;
+	// treat it as an open vocabulary and log what arrives.
+	Cause         string   `json:"cause,omitempty"`
 	OrigMsgID     string   `json:"orig_msg_id,omitempty"`
 	DropReason    string   `json:"drop_reason,omitempty"`
 	DroppedMsgIDs []string `json:"dropped_msg_ids,omitempty"`

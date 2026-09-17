@@ -79,8 +79,21 @@ type Config struct {
 	// its name (Server.AssertModeUnverified).
 	ModeSource ModeSource
 	// AutoStatus answers every accepted user frame that carries a reply
-	// address with a "delivered" peer_message_status, as a session does. A
-	// peer waiting on delivery otherwise learns nothing until its timeout.
+	// address with a "delivered" peer_message_status. A peer waiting on
+	// delivery otherwise learns nothing until its timeout.
+	//
+	// Do NOT turn this on for an inbox that Claude Code sessions send to. A
+	// session emits "delivered" only after a message was HELD and then
+	// approved, so its sender renders any delivered as "approved and released
+	// after approval". An inbox that acks every accept therefore reports a
+	// hold and an approval that never happened, in the sender's terminal,
+	// once per message — and no setting on either side will make it stop,
+	// because nothing was ever held.
+	//
+	// That cost four sessions an hour of measuring a gate that did not exist.
+	// It is off by default and should stay off wherever the senders are
+	// sessions; for peers of our own, prefer an explicit Server.Ack on a
+	// path where "delivered" means something.
 	AutoStatus bool
 	// TrackIdle records notify_when_idle subscriptions taken out against us,
 	// for Server.GoIdle to notify. Without it the request is dispatched to
@@ -131,8 +144,12 @@ type Server struct {
 
 	mu     sync.Mutex
 	closed bool
-	wg     sync.WaitGroup
-	idle   idleSubs
+	// heldMsgIDs records the messages this inbox told a sender were HELD.
+	// "delivered" means "the hold you were told about has been released" and
+	// nothing else, so it is only ours to send for one of these.
+	heldMsgIDs map[string]bool
+	wg         sync.WaitGroup
+	idle       idleSubs
 }
 
 // Listen binds an inbox and, if configured, publishes its key file.
@@ -439,7 +456,7 @@ func (s *Server) dispatch(ctx context.Context, peer *Peer, line []byte, isFirst 
 	switch f.Type {
 	case TypeUser:
 		call(ctx, h.OnUser, h.OnUnknown, peer, f)
-		if s.cfg.AutoStatus {
+		if s.cfg.AutoStatus && s.wasHeld(f.MsgID) {
 			// Reporting happens off the read loop: it dials the sender back,
 			// and that must not stall the connection we are reading.
 			s.wg.Add(1)

@@ -3,9 +3,9 @@
 Go libraries for talking to the agent harnesses on this machine — the processes
 that host a model and the MCP servers it runs.
 
-* `udsmsg` — Claude Code's session-to-session messaging protocol
-  (`uds-messaging`): newline-delimited JSON over a unix domain socket, one
-  socket per session. Undocumented by Anthropic, established by observing
+* `udsmsg` — the observed Claude Code session-to-session messaging protocol
+  (`uds-messaging` is our descriptive name): newline-delimited JSON over a Unix
+  domain socket, one socket per session. Undocumented by Anthropic, established by observing
   sessions on **Claude Code 2.1.272**, and able to change in any release; see
   `docs/claude-uds-messaging.adoc`.
 * `codexmsg` — Codex's app-server protocol: a JSON-RPC dialect over a
@@ -240,7 +240,7 @@ server importing this package has no symbol with which to name another
 session.
 
 ```go
-d := deliver.Open(deliver.WithSenderName("mcp-hub"))
+d := deliver.Open(deliver.WithSenderName("my-mcp-server"))
 defer d.Close()
 
 d.Adopt(req.Params.Meta.AdditionalFields) // every inbound MCP request; no-op on Claude

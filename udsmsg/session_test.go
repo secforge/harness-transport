@@ -9,11 +9,11 @@ import "testing"
 // property — and registering AS a session would be the impersonation that
 // justified not registering at all.
 func TestMCPEntryNamesBothHarnessAndServer(t *testing.T) {
-	e, err := NewMCPEntry("/run/user/0/cc-socks/4242-a1b2c3d4.sock", "mcp-hub (build)", "mcp-hub2")
+	e, err := NewMCPEntry("/run/user/0/cc-socks/4242-a1b2c3d4.sock", "example-mcp-server (build)", "example-mcp-server2")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if e.Name != "mcp-hub (build) · mcp:mcp-hub2" {
+	if e.Name != "example-mcp-server (build) · mcp:example-mcp-server2" {
 		t.Errorf("name = %q, want the harness and the server", e.Name)
 	}
 	if e.Kind == "interactive" {
@@ -26,9 +26,9 @@ func TestMCPEntryNamesBothHarnessAndServer(t *testing.T) {
 
 func TestMCPEntryNameDegradesUsably(t *testing.T) {
 	for _, tc := range []struct{ harness, mcp, want string }{
-		{"mcp-hub (build)", "mcp-hub", "mcp-hub (build) · mcp:mcp-hub"},
-		{"", "mcp-hub", "mcp:mcp-hub"},
-		{"mcp-hub (build)", "", "mcp-hub (build) · mcp"},
+		{"example-mcp-server (build)", "example-mcp-server", "example-mcp-server (build) · mcp:example-mcp-server"},
+		{"", "example-mcp-server", "mcp:example-mcp-server"},
+		{"example-mcp-server (build)", "", "example-mcp-server (build) · mcp"},
 		{"", "", "mcp"},
 	} {
 		if got := mcpEntryName(tc.harness, tc.mcp); got != tc.want {

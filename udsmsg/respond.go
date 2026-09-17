@@ -97,6 +97,13 @@ func (s *Server) SendStatus(ctx context.Context, to string, st Status) error {
 	if to == "" {
 		return fmt.Errorf("no address to report to")
 	}
+	if st.Status == StatusDelivered && !s.wasHeld(st.OrigMsgID) {
+		return fmt.Errorf("refusing to report %q as delivered: this inbox never told its sender that message was held, "+
+			"and \"delivered\" means the hold has been released, not that a message was accepted", st.OrigMsgID)
+	}
+	if st.Status == StatusHeld {
+		s.markHeld(st.OrigMsgID)
+	}
 	if st.Status == StatusRefused {
 		st.Status, st.Detail = StatusExpired, "refused"
 	}
@@ -218,4 +225,28 @@ func (s *Server) GoIdle(ctx context.Context, state IdleState, detail string) err
 		}
 	}
 	return firstErr
+}
+
+// markHeld records that we told a sender its message is held, which is what
+// later licenses a "delivered" for it.
+func (s *Server) markHeld(msgID string) {
+	if msgID == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.heldMsgIDs == nil {
+		s.heldMsgIDs = make(map[string]bool)
+	}
+	s.heldMsgIDs[msgID] = true
+}
+
+// wasHeld reports whether this inbox told a sender that message was held.
+func (s *Server) wasHeld(msgID string) bool {
+	if msgID == "" {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.heldMsgIDs[msgID]
 }

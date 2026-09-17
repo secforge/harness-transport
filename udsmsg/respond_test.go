@@ -29,9 +29,10 @@ func recv(t *testing.T, ch <-chan *Frame) *Frame {
 	}
 }
 
-// A sender learns nothing from a listener that never reports, so an accepted
-// message is answered on the sender's own inbox.
-func TestAutoStatusAcknowledgesToTheSender(t *testing.T) {
+// "delivered" means a hold was released, so an inbox must not send one for a
+// message it simply accepted. Reporting every accept as delivered made each
+// message look, in the sender's terminal, like one held and then approved.
+func TestPlainAcceptIsNotReportedAsDelivered(t *testing.T) {
 	ctx := context.Background()
 
 	got := make(chan *Frame, 4)
@@ -45,11 +46,38 @@ func TestAutoStatusAcknowledgesToTheSender(t *testing.T) {
 		t.Fatalf("dial: %v", err)
 	}
 	defer c.Close()
-	msgID, err := c.SendUser(User{Text: "hello", From: sender.Addr()})
-	if err != nil {
+	if _, err := c.SendUser(User{Text: "hello", From: sender.Addr()}); err != nil {
 		t.Fatalf("send: %v", err)
 	}
 
+	select {
+	case f := <-got:
+		t.Fatalf("a plain accept produced a %q status; nothing was ever held", f.Status)
+	case <-time.After(time.Second):
+	}
+}
+
+// After a real hold, "delivered" is the right word and is sent.
+func TestDeliveredFollowsAHold(t *testing.T) {
+	ctx := context.Background()
+
+	got := make(chan *Frame, 4)
+	sender := listenTest(t, Config{Handler: Handler{
+		OnPeerMessageStatus: func(_ context.Context, _ *Peer, f *Frame) { got <- f },
+	}})
+	receiver := listenTest(t, Config{})
+
+	msgID := NewMsgID()
+	if err := receiver.SendStatus(ctx, sender.Addr(), Status{Status: StatusHeld, OrigMsgID: msgID}); err != nil {
+		t.Fatalf("send held: %v", err)
+	}
+	if f := recv(t, got); f.Status != StatusHeld {
+		t.Fatalf("status = %q, want %q", f.Status, StatusHeld)
+	}
+
+	if err := receiver.SendStatus(ctx, sender.Addr(), Status{Status: StatusDelivered, OrigMsgID: msgID}); err != nil {
+		t.Fatalf("send delivered after a hold: %v", err)
+	}
 	f := recv(t, got)
 	if f.Status != StatusDelivered {
 		t.Errorf("status = %q, want %q", f.Status, StatusDelivered)
@@ -62,6 +90,18 @@ func TestAutoStatusAcknowledgesToTheSender(t *testing.T) {
 	}
 	if f.From != receiver.Addr() {
 		t.Errorf("from = %q, want the receiver's address %q", f.From, receiver.Addr())
+	}
+}
+
+// The vocabulary is enforced rather than documented: a delivered for a
+// message this inbox never held is refused before it reaches the wire.
+func TestDeliveredWithoutAHoldIsRefused(t *testing.T) {
+	s := listenTest(t, Config{})
+	err := s.SendStatus(context.Background(), s.Addr(), Status{
+		Status: StatusDelivered, OrigMsgID: NewMsgID(),
+	})
+	if err == nil {
+		t.Fatal("reporting delivered without a prior hold succeeded, want a refusal")
 	}
 }
 

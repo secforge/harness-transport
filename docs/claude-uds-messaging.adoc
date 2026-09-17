@@ -4,12 +4,15 @@
 :description: The undocumented unix-socket protocol Claude Code sessions use to message each other on one machine — socket layout, token authentication, wire format, message types, and how to write a third-party client.
 :keywords: claude, claude-code, uds, unix socket, ipc, protocol, interoperability, messaging, peer
 
-Claude Code sessions on the same machine talk to each other over unix domain
-sockets. The subsystem calls itself `uds-messaging`; it is what backs
-cross-session messaging and the idle notifications.
+Claude Code sessions on the same machine talk to each other over Unix domain
+sockets. This document calls the observed transport `uds-messaging` (`UDS`
+means Unix domain socket). Claude's official
+https://code.claude.com/docs/en/cross-session-messaging[Cross-session messaging]
+documentation uses `uds:` for local session addresses. The transport backs
+cross-session messaging and idle notifications.
 
-This page documents the protocol as it exists in **Claude Code 2.1.272**
-(`linux-x64`). None of it is published by Anthropic — see
+This page documents the observed wire behavior of **Claude Code 2.1.272**
+(`linux-x64`), not a published protocol specification. See
 <<_provenance_and_caveats>> before relying on it.
 
 TIP: The shortest possible client is one line of shell — see
@@ -45,25 +48,12 @@ takes.
 === Socket location
 
 Sockets live in `/run/user/<uid>/cc-socks/`, which must be mode `0700` and owned
-by the caller or root. Claude Code binds `<pid>.sock` there.
-
-Not all socket file names are accepted — we bind `<pid>-<8hex>.sock`, which is
+by the caller or root. Claude Code binds `<pid>.sock` there. Not all socket file names are accepted — we bind `<pid>-<8hex>.sock`, which is
 both accepted and free of pid collisions across pid namespaces.
 
-=== Environment and flags
-
-[cols="2,3"]
-|===
-| Name | Meaning
-
-| `CLAUDE_CODE_MESSAGING_SOCKET`
-| Path of *this* session's socket. Exported into the session's own environment
-  once the inbox is bound, and inherited by anything it spawns.
-
-| `CLAUDE_CODE_MESSAGING_TOKEN`
-| The **child token** (see <<_authentication>>). Exported to child processes so
-  hooks and spawned tools can talk back without reading any file.
-|===
+Claude Code exports its socket path as `CLAUDE_CODE_MESSAGING_SOCKET` to child
+processes after the inbox is bound, allowing them to identify their parent
+session.
 
 == Authentication
 
@@ -73,8 +63,8 @@ A session has two tokens, each 32 hex chars, and either one authenticates:
 |===
 | Token | Where to get it
 
-| `childToken`
-| `CLAUDE_CODE_MESSAGING_TOKEN` in the environment — inherited by anything the
+| `CLAUDE_CODE_MESSAGING_TOKEN`
+| from the environment — inherited by anything the
   session spawns.
 
 | `peerToken`
@@ -104,29 +94,25 @@ Content:
 }
 ----
 
-The three fields are visible in any key file. That `procStart` and `pidDomain`
-exist so a recycled pid — or an identical pid in a different namespace — cannot
-impersonate the session that published the key is an interpretation of the
-code [.red]#[code]#, not something a reader of the file can see.
-
 === The auth line
 
-The first line of a connection may be an auth frame. With auth optional on this
-host no session ever sent one, so the shape comes not from the wire but from the
-recipe the session itself logs when its inbox binds — which also states whether
-auth is required or optional there:
+Whether a receiver requires authentication is described in
+<<_when_authentication_is_required,When authentication is required>>. When it
+does, the first line of a connection must be an auth frame; when it does not,
+the first line may be an auth frame.
 
 [source,json]
 ----
 {"type":"auth","token":"<32 hex chars>"}
 ----
 
-The guard is deliberately loose about shape and strict about the token: a line
+A line
 counts as an auth frame if it is an object whose `type` is `auth`, so extra
-fields are tolerated. The token then decides the connection's identity — it is
-compared against both of the session's tokens, yielding `peer` or `child`, and
-both are accepted; anything else leaves the connection unauthenticated.
-[.red]#[code]#
+fields are tolerated. A connection whose token matches
+`CLAUDE_CODE_MESSAGING_TOKEN` is accepted as a child-process connection; a
+connection whose token matches the `peerToken` from the key file is accepted
+as a same-user peer connection. Both are accepted; anything else leaves the
+connection unauthenticated.
 
 [cols="2,4"]
 |===
@@ -135,7 +121,7 @@ both are accepted; anything else leaves the connection unauthenticated.
 | Valid token
 | Connection authenticated; subsequent lines are processed.
 
-| Auth is required and the token is absent or wrong
+| Auth is required and authentication is absent or invalid
 | Every line is dropped and the connection destroyed. The receiver logs a
   warning to itself — _"Dropped … from a connection that did not authenticate;
   closing it"_ — and sends nothing back, so the client sees only an abrupt
@@ -144,11 +130,24 @@ both are accepted; anything else leaves the connection unauthenticated.
   on — but it is the default on Windows, so a Windows host reaches this on any
   unauthenticated connection.
 
-| Auth is not required (the default everywhere but Windows)
-| Unauthenticated lines are **accepted**. This is the state when the key file
-  could not be published: _"peers will send unauthenticated (accepted: auth is
-  optional on this platform)"_.
+| Auth is not required and no auth frame is sent
+| Subsequent lines are **accepted** as unauthenticated. This is the state when
+  the key file could not be published: _"peers will send unauthenticated
+  (accepted: auth is optional on this platform)"_.
+
+| Auth is not required and the auth token is wrong
+| The invalid auth frame itself is dropped, but the connection remains open;
+  subsequent lines are accepted as unauthenticated.
 |===
+
+[[when_authentication_is_required]]
+=== When authentication is required
+
+Claude Code's receiver may require authentication depending on the platform
+and configuration. In the observed Linux configuration, authentication is
+optional by default. A third-party inbox may require authentication and
+publish a key file so Claude Code can obtain the accepted token. Native
+Windows uses authentication by default.
 
 IMPORTANT: In the default configuration the token is not a security boundary —
 the `0700` directory is. Any process running as the same uid can both read the
@@ -173,37 +172,29 @@ socket belongs to which process. A start time is carried alongside the pid so
 that a pid which has since been recycled cannot inherit the identity of the
 process that held it.
 
-The consequence for a client is the useful part. You cannot impersonate another
-session by writing its address in `from`; the mismatch is visible to the
-receiver whatever you claim. Nor is a mismatch fatal — the message is still
-delivered. What you lose is the trusted extras: information the receiver is only
-willing to hand to a peer it has positively identified, such as the `detail`
-field on an idle notice. Consistency between the socket you connect from and the
-address you claim is therefore a requirement for the full protocol, not for
-basic delivery. [.red]#[code]# — only the effect is observable from outside.
+The externally visible consequence is that the `from` field does not determine
+the connecting process's kernel identity. A mismatched or unverifiable address
+may still allow basic delivery, but responses that depend on validating the
+return address can omit fields such as `detail` on an idle notice. The exact
+validation rules are described below and were established by controlled
+black-box tests.
 
-Two related filters express the same idea at the message level: a message naming
-a `session_id` other than the receiver's is not for it and is dropped, and a
-message that appears to come from the receiver itself is recognised as its own
-rather than treated as a peer's. [.red]#[code]#
+A frame carrying a `session_id` different from the receiver's is dropped;
+omitting `session_id` does not trigger this check.
 
 == Wire format
 
-* One JSON object per line, `\n`-terminated. The trailing buffer is parsed on
-  close, so a final line without a newline still arrives.
-* A connection that sends **no complete line within 30 s**
-  is closed. [.red]#[code]# The exact figure is from the binary.
-* A line exceeding **1 MiB** (1,048,576 bytes) is dropped along with the connection. [.red]#[code]#
-  Never reached in testing — the largest measured line was 1,014,898 bytes, just
-  under it, so the cap is a read constant, not an observed boundary.
-* Parse failures are logged and skipped, not fatal: _"Failed to parse JSON
-  line"_. [.red]#[code]#
-
+* Each frame is a newline-terminated JSON object. A final complete JSON object
+  may still be processed when the connection closes without a trailing newline.
+* In Claude Code 2.1.272, a connection that sends no complete line within
+  **30 seconds** is disconnected.
+* In the same version, a line exceeding **1 MiB** (1,048,576 bytes) closes the
+  connection.
 == Message types
 
-Only two types are dispatched. Anything else logs
-_"Received unhandled message type"_. [.red]#[code]# A wire capture shows which types are
-*used*, never which are *accepted*.
+Only two frame types were observed in the monitored sessions: `user` and
+`control`. This does not establish which additional types a receiver might
+accept.
 
 === `user`
 
@@ -224,32 +215,45 @@ Injects a prompt into the receiving session's queue.
 | `priority` | Queue placement: `"now"`, `"next"` or `"later"`; absent or unknown silently becomes `"next"`, never a drop. A session sends `"next"` (observed); the rest of this row is [.red]#[code]#. `"now"` also changes *how* the frame is handled, not just where it queues: a `user` frame with `"now"` and no attachments is dispatched immediately instead of being appended to the processing chain, the same bypass control frames get (except `notify_when_idle`). So a `"now"` frame can be processed concurrently with one already in flight.
 | `uuid` | [.red]#[code]# Optional string; becomes the injected prompt's uuid. Unvalidated, generated when absent — not a correlation handle.
 | `from` | Reply address, `uds:<socket path>` (see <<_addressing>>). This is the address the receiver trusts, independent of the one inside the attribution envelope.
-| `from_mode` | Sender's permission posture — `"prompting"` is observed; that the set is exactly `"bypass"` or `"prompting"` is [.red]#[code]#; the receiver uses it for permission-mode parity (a `bypass` sender's message may be held for approval).
+| `from_mode` | Sender's permission posture, `"bypass"` or `"prompting"` [.red]#[code]#. **Not** what the hold decision reads — see below; the gate uses the envelope's `from-mode` attribute instead.
 | `file_attachments` | [.red]#[code]# Array of `{file_uuid, file_name, is_image?, sha256?, file_size?}`. Materialised locally before injection; a prefix naming the received files is prepended to the prompt.
 |===
 
-`from_mode` is the one field here a sender is tempted to get wrong on
+`from_mode` on the frame is *not* the value the hold decision reads, and the
+distinction cost several sessions an hour. [.red]#[code]# The receiver builds
+its attribution data by parsing the **attribution envelope inside
+`message.content`**, and gates on the `from-mode` attribute it finds there;
+the frame-level field belongs to a different lane, described as the posture
+declared by a host injecting a message on local stdin. A client that sets the
+frame field and not the envelope attribute asserts nothing the gate will see.
+
+Two things follow, and the second is the trap. Because the envelope is only
+honoured when it round-trips byte for byte (see <<_attribution_envelope>>),
+an asserted mode is **silently discarded** by any mismatch — so a message
+relayed through something that rebuilds, re-wraps or nests the envelope
+arrives with no posture at all and no error anywhere. Anything forwarding
+these messages should pass the envelope through untouched or strip it
+deliberately, never reconstruct it.
+
+The posture itself is the one value here a sender is tempted to get wrong on
 purpose. The receiver holds a message whose asserted mode differs from its
 own, lets a matching one through, and cannot check either way — so the
 posture that clears the gate is always available to anyone willing to state
 it. Where the gate exists for a user's decision, stating it is spending that
 decision on their behalf.
 
-The library therefore gives no way to state one casually. `deliver` exposes
-`WithDetectedMode`, and an inbox sets `Config.ModeSource`; both read the
-posture from the spawning session's command line via
-`udsmsg.DetectParentMode` and refuse rather than guess when they cannot tell.
-A caller who genuinely knows better can still claim one — `WithAssertedMode`,
-`Server.AssertModeUnverified` — and the names are the warning. Asserting
-nothing is the safe failure: a frame with no `from_mode` is held only by a
-`bypass` receiver, never by a prompting one.
+An interoperating client should derive the posture from the spawning session's
+launch configuration and refuse to guess when it cannot tell. A caller that
+explicitly supplies a posture is making an unverifiable claim. Leaving the
+posture unset is the safe failure: a frame with no `from_mode` is held only by
+a `bypass` receiver, never by a prompting one.
 
 Both derivations read *launch* flags, so a mode changed mid-session is
 invisible. That error runs toward a hold, not through one.
 
-The injected turn is marked `isMeta`, `skipSlashCommands` and
-`skipAttachments`, so a peer cannot invoke slash commands in the receiver. [.red]#[code]#
-The consequence is testable from outside; the flag names are not.
+The injected content is handled as a cross-session prompt: it does not invoke
+the receiver's slash-command or attachment-processing paths. The observable
+restriction matters to a client; Claude's internal implementation names do not.
 
 ==== Attribution envelope
 
@@ -407,21 +411,14 @@ Reply addresses use a scheme prefix:
 ^(?:uds|bridge|did):.{1,200}$
 ----
 
-[.red]#[code]# — the scheme grammar above, and everything in this paragraph:
-`uds:` is the local socket path and the only scheme with a transport in this
-module; `bridge:` is the Remote Control bridge; `did:` is an identity-shaped
-address with no local handler — several call paths reject both outright
-(`errorCode 9`). Only `uds:` addresses appear on the wire.
+`uds:` is the local socket path and the only scheme with a transport here.
+`bridge:` and `did:` are other address forms, but they are not local socket
+targets. Only `uds:` addresses appear on the wire for this transport.
 
-Hop tokens are keyed, not random [.red]#[code]#: HMAC-SHA256 over the address,
-truncated to 24 hex, under a 256-bit key generated once per process.
-From outside, all that is visible is a 24-hex token that repeats across messages
-from one session — consistent with the derivation, but equally consistent with a
-random per-session value.
-A token is therefore stable for a session's lifetime, changes on restart, and
-cannot be computed by a third party. The chain keeps the last 32 entries; a
-frame whose chain already contains the receiver's own token is dropped as a
-relay loop. [.red]#[code]#
+Hop tokens appear as stable 24-hex values across messages from one session.
+That observed shape is sufficient for an interoperating client: preserve the chain when
+relaying, or leave it empty when not relaying. The derivation, rotation and
+chain-size implementation are not part of this client-facing specification.
 
 ==== Which reply targets are accepted
 
@@ -638,25 +635,87 @@ exchange, captured between two live sessions; and delivery behaviour and message
 sizes established by sending to a live session and watching what came back — see
 <<_message_sizes>>. These claims survive an upgrade or fail loudly.
 
-*Read.* Everything marked [.red]#[code]#. Claude Code ships as a Bun single-file
-executable whose JavaScript is stored as plain text, and those claims come from
-reading it: accepted-but-unused fields, validation rules, error branches no
-ordinary exchange takes, constants never reached in testing, and internal names.
-A wire capture can show what two sessions *do*; only the code shows what a
-receiver would *accept*. Treat the marked claims as the ones to re-verify, and
-note that two of them were wrong on a first reading of minified code and only
-caught on a second pass.
+*Read.* Only claims still marked [.red]#[code]# below required reading the
+Claude Code implementation. They are retained only where an interoperating client needs the
+behaviour and a black-box test cannot establish it. Internal names, logging,
+unreached constants, and branches that clients do not use are deliberately
+not part of the interoperability contract. Everything else in this document
+is a claim about a running Claude Code instance: traffic, files, environment,
+or externally visible behaviour.
+
+=== Measuring an absence
+
+Several of the behaviours above are only observable as something *not*
+happening — a message not held, a status not sent, a notice not arriving. That
+makes them easy to measure wrongly, and one trap is worth naming because it
+has caught every session that went looking.
+
+The approval notice for a held cross-session message is **asynchronous**. The
+send returns first, and the notice follows seconds later. So a test that sends,
+sees no notice, and concludes "not held" has measured latency, not behaviour —
+the correct reading of no notice yet is *not yet*.
+
+The converse trap is worse, because the notice can appear when nothing was
+held. A session emits `peer_message_status` **only on the hold path** — `held`,
+then `denied` or `delivered` once the user answers. An ordinary accepted
+message is reported on by nobody. A sender therefore treats a bare `delivered`
+as the end of a hold it may never have seen the start of, and renders it as
+_"approved and released after approval"_.
+
+So an inbox that acknowledges every accepted frame with `delivered` — which is
+friendlier than silence, and tempting for exactly that reason — makes every
+message sent to it look like one its user had to approve. The symptom is an
+approval notice with no approval, no hold and no permission gate anywhere near
+it, on a path where the receiver has no approval surface at all. Acknowledging
+everything is more talkative than a session, not a faithful imitation of one.
+Reserve `delivered` for a real hold that was approved.
+
+Three sessions each published that conclusion within an hour, and each had to
+retract it; in two cases the retraction crossed with somebody building further
+work on the wrong result. If a test's negative result is an absence, give it a
+bounded wait before the absence means anything, and say what the bound was when
+reporting it.
+
+The same shape applies to the parity check in <<_user>>: because a matching
+mode and an unasserted mode both usually result in delivery, a message getting
+through establishes very little about `from_mode`. What discriminates is a
+receiver in `bypass`, which holds an unasserted frame and accepts a matching
+one.
 
 === Known gaps
 
 Wire-level items not established, all of which a client can work around:
 
-* the full `drop_reason` vocabulary: it is a validated free string, and only
-  `queue-full` is confirmed as a compared literal. The status prose names the
-  causes — _"rate limit, duplicate, relay loop, or full queue"_. Both the
-  validator and the prose are [.red]#[code]#
-* whether the auth guard enforces the 32-hex token shape on input (it does not
-  check it structurally; the comparison against the stored token is what fails) [.red]#[code]#
+* the full `drop_reason` vocabulary; clients can record the value without
+  interpreting it
+
+=== Reverse-engineering residuals for an interoperating client
+
+This is the complete list of facts in this specification that are both needed
+by an interoperating client and not establishable by observing Claude Code connections and
+their effects alone:
+
+* The receiver's attribution parser requires a byte-for-byte re-render of the
+  envelope before it treats the content as attributed. The observable result
+  (valid envelopes are attributed and malformed or altered ones become plain
+  text) is testable; the implementation mechanism is not.
+* The receiver uses the envelope's `from-mode` attribute, rather than the
+  frame-level `from_mode`, for the permission-mode gate. This distinction is
+  needed to send replies that are not unnecessarily held; it cannot be
+  inferred from a successful exchange alone because an unasserted message can
+  also be delivered.
+* The auth line is consumed before normal dispatch when authentication is
+  required. An interoperating client needs this to implement an authenticated inbox, but a
+  normal authenticated exchange does not reveal whether the line was consumed
+  or merely ignored after validation.
+
+Everything else an interoperating client relies on can be established by black-box probing:
+socket and key discovery, newline framing, auth success/failure, peer
+credentials, prompt and control frames, attribution rendering, reply-address
+behaviour, status/idle messages, attachments, and the effects of permission
+mode and malformed input. Details such as exact log strings, internal prompt
+flags, Windows-only address branches, cleanup sweeps, and token derivation are
+not needed by an interoperating client and are intentionally excluded from the residual list.
 
 Everything a client must produce to send a prompt, and everything it can
 receive in reply, is covered above.
@@ -673,5 +732,6 @@ it controls.
 
 == See also
 
+* https://code.claude.com/docs/en/cross-session-messaging[Claude Code: Cross-session messaging] — official feature documentation; it describes the feature and `uds:` local addresses, but not this wire format.
 * xref:claude-session.adoc[`c` — starting and resuming sessions]
 * xref:claude-move.adoc[`claude-move` — relocating a project's Claude state]

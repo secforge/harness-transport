@@ -24,8 +24,8 @@ type Key struct {
 	PIDDomain string `json:"pidDomain"`
 }
 
-// SessionsDir is the directory holding the session registry and key files.
-func SessionsDir() string {
+// sessionsDir is the directory holding the session registry and key files.
+func sessionsDir() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return filepath.Join("/root", ".claude", "sessions")
@@ -33,9 +33,9 @@ func SessionsDir() string {
 	return filepath.Join(home, ".claude", "sessions")
 }
 
-// KeyFileName returns the key file name for a session: the pid, then the
+// keyFileName returns the key file name for a session: the pid, then the
 // sha256 of the canonical socket path, which binds a key to one socket.
-func KeyFileName(pid int, socketPath string) (string, error) {
+func keyFileName(pid int, socketPath string) (string, error) {
 	canon, err := filepath.EvalSymlinks(socketPath)
 	if err != nil {
 		// A socket that has gone away still has a well-defined canonical
@@ -54,11 +54,11 @@ func KeyFileName(pid int, socketPath string) (string, error) {
 // missing key file is not an error in the default configuration, where auth
 // is optional: it returns (nil, nil).
 func ReadKey(pid int, socketPath string) (*Key, error) {
-	name, err := KeyFileName(pid, socketPath)
+	name, err := keyFileName(pid, socketPath)
 	if err != nil {
 		return nil, err
 	}
-	path := filepath.Join(SessionsDir(), name)
+	path := filepath.Join(sessionsDir(), name)
 	fi, err := os.Stat(path)
 	if os.IsNotExist(err) {
 		return nil, nil
@@ -80,14 +80,14 @@ func ReadKey(pid int, socketPath string) (*Key, error) {
 	return &k, nil
 }
 
-// WriteKey publishes a key file atomically, through a temporary name that is
+// writeKey publishes a key file atomically, through a temporary name that is
 // renamed into place so a reader never sees a partial file.
-func WriteKey(pid int, socketPath string, k *Key) error {
-	name, err := KeyFileName(pid, socketPath)
+func writeKey(pid int, socketPath string, k *Key) error {
+	name, err := keyFileName(pid, socketPath)
 	if err != nil {
 		return err
 	}
-	dir := SessionsDir()
+	dir := sessionsDir()
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
@@ -113,20 +113,20 @@ func WriteKey(pid int, socketPath string, k *Key) error {
 	return nil
 }
 
-// RemoveKey deletes a published key file. A missing file is not an error.
-func RemoveKey(pid int, socketPath string) error {
-	name, err := KeyFileName(pid, socketPath)
+// removeKey deletes a published key file. A missing file is not an error.
+func removeKey(pid int, socketPath string) error {
+	name, err := keyFileName(pid, socketPath)
 	if err != nil {
 		return err
 	}
-	if err := os.Remove(filepath.Join(SessionsDir(), name)); err != nil && !os.IsNotExist(err) {
+	if err := os.Remove(filepath.Join(sessionsDir(), name)); err != nil && !os.IsNotExist(err) {
 		return err
 	}
 	return nil
 }
 
-// NewToken returns a fresh 128-bit token as 32 hex characters.
-func NewToken() string {
+// newToken returns a fresh 128-bit token as 32 hex characters.
+func newToken() string {
 	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {
 		panic("udsmsg: crypto/rand failed: " + err.Error())

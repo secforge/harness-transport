@@ -66,9 +66,9 @@ func TestWrapDropsUnusableAttributes(t *testing.T) {
 // attribute rather than escaped: the captured frame shows no escaping, so an
 // escape would be a rendering we have never seen accepted.
 func TestScrubNameStripsRatherThanEscapes(t *testing.T) {
-	got := ScrubName(`ev"il <tag> name`)
+	got := scrubName(`ev"il <tag> name`)
 	if want := "evil tag name"; got != want {
-		t.Errorf("ScrubName = %q, want %q", got, want)
+		t.Errorf("scrubName = %q, want %q", got, want)
 	}
 	if strings.Contains(got, "&") {
 		t.Errorf("name must not be XML-escaped: %q", got)
@@ -80,15 +80,15 @@ func TestScrubNameStripsRatherThanEscapes(t *testing.T) {
 // containing a zero-width space were both accepted whole, so there is no cap
 // to apply and no invisible to strip.
 func TestScrubNameStripsOnlyWhatWasMeasuredToMatter(t *testing.T) {
-	if got := ScrubName("  a\nb\x07  "); got != "ab" {
-		t.Errorf("ScrubName = %q, want %q", got, "ab")
+	if got := scrubName("  a\nb\x07  "); got != "ab" {
+		t.Errorf("scrubName = %q, want %q", got, "ab")
 	}
-	if got := ScrubName("a\u200bb"); got != "a\u200bb" {
-		t.Errorf("ScrubName stripped an invisible the receiver accepts: %q", got)
+	if got := scrubName("a\u200bb"); got != "a\u200bb" {
+		t.Errorf("scrubName stripped an invisible the receiver accepts: %q", got)
 	}
 	long := strings.Repeat("n", 5000)
-	if got := ScrubName(long); got != long {
-		t.Errorf("ScrubName shortened a 5000-rune name; no cap was observed")
+	if got := scrubName(long); got != long {
+		t.Errorf("scrubName shortened a 5000-rune name; no cap was observed")
 	}
 }
 

@@ -7,13 +7,15 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
+	"unicode"
 )
 
-// PeerFeatures are the capability strings a session was observed to advertise
+// peerFeatures are the capability strings a session was observed to advertise
 // in its registry entry. They are reproduced so an entry looks like the ones
 // alongside it; what a reader does with them is not observable from here.
-var PeerFeatures = []string{"notify_idle", "reply_across_default_dirs", "artifact_yield"}
+var peerFeatures = []string{"notify_idle", "reply_across_default_dirs", "artifact_yield"}
 
 // SessionEntry is a registry record, ~/.claude/sessions/<pid>.json. Publishing
 // one makes a process discoverable as a session: other sessions list it, and a
@@ -31,32 +33,43 @@ type SessionEntry struct {
 	Entrypoint          string   `json:"entrypoint"`
 	PIDDomain           string   `json:"pidDomain"`
 	MessagingSocketPath string   `json:"messagingSocketPath"`
-	Name                string   `json:"name,omitempty"`
-	NameSource          string   `json:"nameSource,omitempty"`
-	NameSince           int64    `json:"nameSince,omitempty"`
-	UpdatedAt           int64    `json:"updatedAt"`
-	Status              string   `json:"status"`
+	// Name is what a reader of the registry displays for this process. It is
+	// the caller's, and NewSessionEntry takes it as given apart from
+	// refusing the values that would corrupt a display: empty, or carrying a
+	// control character. No length is enforced — none was observed.
+	//
+	// It confers nothing. Any process of the same uid can publish an entry
+	// under any name, so a name is a label, never evidence.
+	Name       string `json:"name,omitempty"`
+	NameSource string `json:"nameSource,omitempty"`
+	NameSince  int64  `json:"nameSince,omitempty"`
+	UpdatedAt  int64  `json:"updatedAt"`
+	Status     string `json:"status"`
 }
 
-// NewSessionEntry fills in a registry record for this process, describing the
-// given inbox.
+// NewSessionEntry fills in a registry record for this process. Kind and
+// entrypoint come from the caller and are not defaulted: only the caller knows
+// what this process is, and an entry saying "interactive" when it is not is
+// read as a session by everything that lists the registry.
 //
-// Kind and entrypoint come from the caller because only the caller knows what
-// this process is. They are not defaulted: an entry that says "interactive"
-// when it is not claims to be something else, and every reader of the registry
-// takes that at face value.
+// The name is rejected rather than repaired when it cannot be displayed — see
+// Name — because a caller that passed something unusable should hear so, not
+// discover later that it publishes under something it did not choose.
 func NewSessionEntry(socketPath, name, kind, entrypoint string) (*SessionEntry, error) {
+	if err := checkEntryName(name); err != nil {
+		return nil, err
+	}
 	now := time.Now().UnixMilli()
 	pid := os.Getpid()
 	cwd, _ := os.Getwd()
 	e := &SessionEntry{
 		PID:                 pid,
-		SessionID:           NewUUID(),
+		SessionID:           newUUID(),
 		CWD:                 cwd,
 		StartedAt:           now,
 		Version:             "2.1.272",
 		PeerProtocol:        1,
-		PeerFeatures:        PeerFeatures,
+		PeerFeatures:        peerFeatures,
 		Kind:                kind,
 		Entrypoint:          entrypoint,
 		MessagingSocketPath: socketPath,
@@ -71,21 +84,34 @@ func NewSessionEntry(socketPath, name, kind, entrypoint string) (*SessionEntry, 
 		return nil, err
 	}
 	e.ProcStart = ps
-	if pd, err := PIDDomain(pid); err == nil {
+	if pd, err := pidDomain(pid); err == nil {
 		e.PIDDomain = pd
 	}
 	return e, nil
 }
 
+// checkEntryName refuses a name a reader could not display as given.
+func checkEntryName(name string) error {
+	if strings.TrimSpace(name) == "" {
+		return fmt.Errorf("a registry entry needs a name")
+	}
+	for _, r := range name {
+		if unicode.Is(unicode.Cc, r) {
+			return fmt.Errorf("name %q contains a control character", name)
+		}
+	}
+	return nil
+}
+
 // sessionEntryPath is the registry file for a pid.
 func sessionEntryPath(pid int) string {
-	return filepath.Join(SessionsDir(), fmt.Sprintf("%d.json", pid))
+	return filepath.Join(sessionsDir(), fmt.Sprintf("%d.json", pid))
 }
 
 // PublishSession writes a registry entry atomically, the way the key file is
 // written, so a reader never sees a partial record.
 func PublishSession(e *SessionEntry) error {
-	if err := os.MkdirAll(SessionsDir(), 0o700); err != nil {
+	if err := os.MkdirAll(sessionsDir(), 0o700); err != nil {
 		return err
 	}
 	b, err := json.Marshal(e)
@@ -116,10 +142,10 @@ func UnpublishSession(pid int) error {
 	return nil
 }
 
-// NewUUID returns a random RFC 4122 version 4 UUID. Real sessions use this
+// newUUID returns a random RFC 4122 version 4 UUID. Real sessions use this
 // shape for both sessionId and msg_id, despite the 32-hex form the protocol
 // notes describe.
-func NewUUID() string {
+func newUUID() string {
 	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {
 		panic("udsmsg: crypto/rand failed: " + err.Error())

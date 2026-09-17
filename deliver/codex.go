@@ -3,6 +3,7 @@ package deliver
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"sync"
 	"unicode/utf8"
@@ -90,7 +91,14 @@ func (c *codexBackend) Available() (bool, string) {
 // worst a confused caller can do is fail rather than redirect.
 func (c *codexBackend) Adopt(meta map[string]any) error {
 	id, err := threadIDFromMeta(meta)
-	if err != nil {
+	switch {
+	case errors.Is(err, errNoMeta):
+		// Nothing to adopt is not a failure. Adopt is documented as safe to
+		// call on every request, and most requests carry no thread id, so
+		// reporting one as an error hands the caller a refusal to explain
+		// where nothing went wrong.
+		return nil
+	case err != nil:
 		return err
 	}
 	c.mu.Lock()

@@ -8,44 +8,36 @@ import (
 	"strings"
 )
 
-// SchemeUDS is the only reply-address scheme observed on this transport.
-const SchemeUDS = "uds"
+// schemeUDS is the only reply-address scheme observed on this transport.
+const schemeUDS = "uds"
 
-// MaxSocketPath is the longest path a unix socket can have: sun_path is 108
+// maxSocketPath is the longest path a unix socket can have: sun_path is 108
 // bytes and holds a NUL-terminated string. A longer address names a socket
 // nothing could have bound, so both address guards below are built from this
 // rather than from a chosen number.
-const MaxSocketPath = 107
+const maxSocketPath = 107
 
 // addrRe is the reply-address shape this package accepts. Observed addresses
 // are uds:, and nothing else is recognised: an address shape accepted here is
 // one this package is willing to resolve and send to.
-var addrRe = regexp.MustCompile(fmt.Sprintf(`^%s:.{1,%d}$`, SchemeUDS, MaxSocketPath))
+var addrRe = regexp.MustCompile(fmt.Sprintf(`^%s:.{1,%d}$`, schemeUDS, maxSocketPath))
 
 // dialNameRe is what this package will CONNECT TO, deliberately wider than
-// what it binds: a name grants nothing, safety comes from CheckDir and the
+// what it binds: a name grants nothing, safety comes from checkDir and the
 // kernel's credentials, and refusing an unfamiliar one only costs a reply. It
 // still excludes anything that is not a plain ".sock" leaf.
 var dialNameRe = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}\.sock$`)
 
-// ValidAddress reports whether addr is a well-shaped reply address. Shape is
+// validAddress reports whether addr is a well-shaped reply address. Shape is
 // necessary and not sufficient: whether the socket it names is one worth
-// connecting to is decided when connecting, by CheckDir on its directory.
-func ValidAddress(addr string) bool { return addrRe.MatchString(addr) }
+// connecting to is decided when connecting, by checkDir on its directory.
+func validAddress(addr string) bool { return addrRe.MatchString(addr) }
 
-// UDSAddress formats a socket path as a uds: reply address.
-func UDSAddress(path string) string { return SchemeUDS + ":" + path }
+// udsAddress formats a socket path as a uds: reply address.
+func udsAddress(path string) string { return schemeUDS + ":" + path }
 
-// ParseUDS extracts the socket path from a uds: address.
-func ParseUDS(addr string) (path string, ok bool) {
-	if !ValidAddress(addr) || !strings.HasPrefix(addr, SchemeUDS+":") {
-		return "", false
-	}
-	return strings.TrimPrefix(addr, SchemeUDS+":"), true
-}
-
-// ValidSocketName reports whether name is one this package will connect to.
-func ValidSocketName(name string) bool {
+// validSocketName reports whether name is one this package will connect to.
+func validSocketName(name string) bool {
 	return name != ".sock" && !strings.Contains(name, "..") && dialNameRe.MatchString(name)
 }
 
@@ -53,7 +45,7 @@ func ValidSocketName(name string) bool {
 // does not carry one returns ok == false, which is not an error: a peer may
 // name its inbox anything, and the pid is simply unavailable then.
 func PIDFromSocketName(name string) (pid int, ok bool) {
-	if !ValidSocketName(name) {
+	if !validSocketName(name) {
 		return 0, false
 	}
 	base := strings.TrimSuffix(name, ".sock")
@@ -67,11 +59,11 @@ func PIDFromSocketName(name string) (pid int, ok bool) {
 	return n, true
 }
 
-// CheckDir verifies a socket directory is safe to use: mode 0700 and owned by
+// checkDir verifies a socket directory is safe to use: mode 0700 and owned by
 // the caller or root. That is the whole boundary this transport rests on — the
 // token in a key file protects nothing a same-uid process cannot already read,
 // so a directory anyone else can enter makes the socket inside it public.
-func CheckDir(dir string) error {
+func checkDir(dir string) error {
 	fi, err := os.Stat(dir)
 	if err != nil {
 		return err

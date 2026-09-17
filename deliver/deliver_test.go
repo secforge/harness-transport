@@ -2,6 +2,7 @@ package deliver
 
 import (
 	"context"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -76,14 +77,14 @@ func TestThreadIDFromMeta(t *testing.T) {
 	if err != nil || id != "01a0-abc" {
 		t.Fatalf("threadIDFromMeta = %q, %v", id, err)
 	}
-	if _, err := threadIDFromMeta(nil); !IsNoThreadID(err) {
+	if _, err := threadIDFromMeta(nil); !errors.Is(err, errNoMeta) {
 		t.Errorf("nil meta should report no thread id, got %v", err)
 	}
-	if _, err := threadIDFromMeta(map[string]any{"itemId": "x"}); !IsNoThreadID(err) {
+	if _, err := threadIDFromMeta(map[string]any{"itemId": "x"}); !errors.Is(err, errNoMeta) {
 		t.Errorf("meta without a thread id should say so, got %v", err)
 	}
 	// A wrong type is a real error, not "absent": something is malformed.
-	if _, err := threadIDFromMeta(map[string]any{"threadId": 42}); err == nil || IsNoThreadID(err) {
+	if _, err := threadIDFromMeta(map[string]any{"threadId": 42}); err == nil || errors.Is(err, errNoMeta) {
 		t.Errorf("a non-string thread id should be an error, got %v", err)
 	}
 	if _, err := threadIDFromMeta(map[string]any{"threadId": "  "}); err == nil {

@@ -2,13 +2,10 @@
 // the local app-server daemon, the way claude-send does for a Claude Code
 // session.
 //
-// The two protocols are opposites. Claude Code is a mesh: a socket per
-// session, peers addressing each other by socket path, identity from
-// SO_PEERCRED and a token. Codex is a hub: one daemon owns every thread and a
-// client names a thread by id. So there is no inbox to bind here and no reply
-// address to publish — and no reply, either. A queued message joins a
-// session's queue; what the session does with it appears in that session's
-// own UI.
+// The two protocols are opposites: Claude Code is a mesh of per-session
+// sockets, Codex a hub where one daemon owns every thread. So there is no
+// inbox to bind and no reply — a queued message joins the session's queue and
+// what becomes of it appears in that session's own UI.
 package main
 
 import (

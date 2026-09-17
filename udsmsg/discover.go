@@ -7,10 +7,10 @@ import (
 	"strings"
 )
 
-// SocketDirs returns the standard socket directories in probe order. Only the
+// socketDirs returns the standard socket directories in probe order. Only the
 // ones that could exist on this platform are listed; callers should skip any
-// that fail CheckDir.
-func SocketDirs() []string {
+// that fail checkDir.
+func socketDirs() []string {
 	uid := os.Getuid()
 	dirs := []string{}
 	if runtime := os.Getenv("XDG_RUNTIME_DIR"); runtime != "" {
@@ -39,10 +39,10 @@ func dedup(in []string) []string {
 	return out
 }
 
-// FindSocket returns the bound inbox of a session by pid.
-func FindSocket(pid int) (string, error) {
-	for _, dir := range SocketDirs() {
-		if err := CheckDir(dir); err != nil {
+// findSocket returns the bound inbox of a session by pid.
+func findSocket(pid int) (string, error) {
+	for _, dir := range socketDirs() {
+		if err := checkDir(dir); err != nil {
 			continue
 		}
 		p := filepath.Join(dir, fmt.Sprintf("%d.sock", pid))
@@ -50,7 +50,7 @@ func FindSocket(pid int) (string, error) {
 			return p, nil
 		}
 	}
-	return "", fmt.Errorf("no socket for pid %d in %s", pid, strings.Join(SocketDirs(), ", "))
+	return "", fmt.Errorf("no socket for pid %d in %s", pid, strings.Join(socketDirs(), ", "))
 }
 
 // Target is a resolved send destination: where to connect, and the token to
@@ -70,7 +70,7 @@ type Target struct {
 
 // ResolveTarget locates a session's inbox and the token published for it.
 func ResolveTarget(pid int) (Target, error) {
-	path, err := FindSocket(pid)
+	path, err := findSocket(pid)
 	if err != nil {
 		return Target{}, err
 	}

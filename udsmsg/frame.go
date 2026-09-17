@@ -8,7 +8,6 @@
 package udsmsg
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"regexp"
@@ -71,8 +70,8 @@ func (f *Frame) Text() string {
 	return f.Message.Content
 }
 
-// DecodeFrame parses one line. Raw is set to a copy of the input.
-func DecodeFrame(line []byte) (*Frame, error) {
+// decodeFrame parses one line. Raw is set to a copy of the input.
+func decodeFrame(line []byte) (*Frame, error) {
 	var f Frame
 	if err := json.Unmarshal(line, &f); err != nil {
 		return nil, fmt.Errorf("parse JSON line: %w", err)
@@ -81,9 +80,9 @@ func DecodeFrame(line []byte) (*Frame, error) {
 	return &f, nil
 }
 
-// EncodeFrame marshals a frame as a newline-terminated line, rejecting one
+// encodeFrame marshals a frame as a newline-terminated line, rejecting one
 // over the documented line cap — a longer line closes the connection.
-func EncodeFrame(f *Frame) ([]byte, error) {
+func encodeFrame(f *Frame) ([]byte, error) {
 	b, err := json.Marshal(f)
 	if err != nil {
 		return nil, fmt.Errorf("marshal frame: %w", err)
@@ -94,24 +93,11 @@ func EncodeFrame(f *Frame) ([]byte, error) {
 	return append(b, '\n'), nil
 }
 
-// MsgIDPattern is the RFC-4122 shape sessions were observed to send as a
+// msgIDPattern is the RFC-4122 shape sessions were observed to send as a
 // msg_id. The 32-hex form that appears elsewhere in this protocol is a Windows
 // pipe name, not a message id.
-var MsgIDPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+var msgIDPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
-// NewMsgID returns a sender-assigned message id, the UUID shape Claude Code
+// newMsgID returns a sender-assigned message id, the UUID shape Claude Code
 // itself sends and validates.
-func NewMsgID() string { return NewUUID() }
-
-// splitLines splits a buffer on '\n', returning the complete lines and the
-// remaining partial tail.
-func splitLines(buf []byte) (lines [][]byte, rest []byte) {
-	for {
-		i := bytes.IndexByte(buf, '\n')
-		if i < 0 {
-			return lines, buf
-		}
-		lines = append(lines, buf[:i])
-		buf = buf[i+1:]
-	}
-}
+func newMsgID() string { return newUUID() }

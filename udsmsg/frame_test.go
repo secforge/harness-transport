@@ -8,7 +8,7 @@ import (
 
 func TestDecodeUserFrame(t *testing.T) {
 	line := []byte(`{"type":"user","msg_id":"ab12","from":"uds:/tmp/cc-socks/1.sock","from_mode":"prompting","message":{"role":"user","content":"hello"}}`)
-	f, err := DecodeFrame(line)
+	f, err := decodeFrame(line)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -21,7 +21,7 @@ func TestDecodeUserFrame(t *testing.T) {
 }
 
 func TestTextIsEmptyWithoutMessage(t *testing.T) {
-	f, err := DecodeFrame([]byte(`{"type":"user"}`))
+	f, err := decodeFrame([]byte(`{"type":"user"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,7 +35,7 @@ func TestTextIsEmptyWithoutMessage(t *testing.T) {
 // a caller that wants such a frame reads Raw.
 func TestUnmodelledFramesSurviveDecoding(t *testing.T) {
 	const line = `{"type":"control","action":"peer_message_status","orig_msg_id":"m1"}`
-	f, err := DecodeFrame([]byte(line))
+	f, err := decodeFrame([]byte(line))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +48,7 @@ func TestUnmodelledFramesSurviveDecoding(t *testing.T) {
 }
 
 func TestEncodeFrameOmitsEmptyFields(t *testing.T) {
-	line, err := EncodeFrame(&Frame{Type: TypeUser, Message: &UserMessage{Role: "user", Content: "hi"}})
+	line, err := encodeFrame(&Frame{Type: TypeUser, Message: &UserMessage{Role: "user", Content: "hi"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,13 +59,13 @@ func TestEncodeFrameOmitsEmptyFields(t *testing.T) {
 
 func TestEncodeFrameRejectsOversizeLine(t *testing.T) {
 	f := &Frame{Type: TypeUser, Message: &UserMessage{Role: "user", Content: strings.Repeat("x", MaxLineBytes)}}
-	if _, err := EncodeFrame(f); err == nil {
+	if _, err := encodeFrame(f); err == nil {
 		t.Fatal("want an error for a frame over the line cap")
 	}
 }
 
 func TestDecodeFrameRejectsGarbage(t *testing.T) {
-	if _, err := DecodeFrame([]byte("not json")); err == nil {
+	if _, err := decodeFrame([]byte("not json")); err == nil {
 		t.Fatal("want a parse error")
 	}
 }
@@ -76,8 +76,8 @@ func TestDecodeFrameRejectsGarbage(t *testing.T) {
 func TestNewMsgIDIsAUUID(t *testing.T) {
 	seen := map[string]bool{}
 	for i := 0; i < 100; i++ {
-		id := NewMsgID()
-		if !MsgIDPattern.MatchString(id) {
+		id := newMsgID()
+		if !msgIDPattern.MatchString(id) {
 			t.Fatalf("msg id %q is not the UUID shape sessions send", id)
 		}
 		if seen[id] {
@@ -85,14 +85,14 @@ func TestNewMsgIDIsAUUID(t *testing.T) {
 		}
 		seen[id] = true
 	}
-	if MsgIDPattern.MatchString(strings.Repeat("a", 32)) {
+	if msgIDPattern.MatchString(strings.Repeat("a", 32)) {
 		t.Error("32 hex is a pipe name, and should not pass as a msg_id")
 	}
 }
 
 func TestUnknownFieldsSurviveInRaw(t *testing.T) {
 	line := []byte(`{"type":"control","action":"future_action","novel_field":{"deep":1}}`)
-	f, err := DecodeFrame(line)
+	f, err := decodeFrame(line)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,15 +102,5 @@ func TestUnknownFieldsSurviveInRaw(t *testing.T) {
 	}
 	if _, ok := m["novel_field"]; !ok {
 		t.Error("novel_field lost; Raw should preserve the whole line")
-	}
-}
-
-func TestSplitLines(t *testing.T) {
-	lines, rest := splitLines([]byte("a\nbb\nccc"))
-	if len(lines) != 2 || string(lines[0]) != "a" || string(lines[1]) != "bb" {
-		t.Fatalf("lines = %q", lines)
-	}
-	if string(rest) != "ccc" {
-		t.Errorf("rest = %q, want the partial tail", rest)
 	}
 }

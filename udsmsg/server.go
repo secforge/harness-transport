@@ -17,9 +17,9 @@ import (
 	"time"
 )
 
-// ErrLineTooLong is reported when a line exceeds MaxLineBytes. The receiver
+// errLineTooLong is reported when a line exceeds MaxLineBytes. The receiver
 // drops the whole connection in that case, not just the offending line.
-var ErrLineTooLong = errors.New("line exceeds the 1 MiB cap")
+var errLineTooLong = errors.New("line exceeds the 1 MiB cap")
 
 // Handler receives dispatched frames. Every field is optional; a nil callback
 // means the frame is accepted and discarded. Each callback gets the verified
@@ -109,7 +109,7 @@ func Listen(cfg Config) (*Server, error) {
 			return nil, err
 		}
 		path = p
-	} else if err := CheckDir(filepath.Dir(path)); err != nil {
+	} else if err := checkDir(filepath.Dir(path)); err != nil {
 		return nil, fmt.Errorf("socket directory: %w", err)
 	}
 
@@ -129,7 +129,7 @@ func Listen(cfg Config) (*Server, error) {
 		ln.Close()
 		return nil, err
 	}
-	s := &Server{cfg: cfg, ln: ln, path: path, token: NewToken()}
+	s := &Server{cfg: cfg, ln: ln, path: path, token: newToken()}
 
 	if cfg.ModeSource != ModeSourceNone {
 		m, err := DetectParentMode()
@@ -148,10 +148,10 @@ func Listen(cfg Config) (*Server, error) {
 		if ps, err := ProcStart(os.Getpid()); err == nil {
 			k.ProcStart = ps
 		}
-		if pd, err := PIDDomain(os.Getpid()); err == nil {
+		if pd, err := pidDomain(os.Getpid()); err == nil {
 			k.PIDDomain = pd
 		}
-		if err := WriteKey(os.Getpid(), path, k); err != nil {
+		if err := writeKey(os.Getpid(), path, k); err != nil {
 			s.Close()
 			return nil, fmt.Errorf("publish key file: %w", err)
 		}
@@ -159,7 +159,7 @@ func Listen(cfg Config) (*Server, error) {
 	return s, nil
 }
 
-// allocSocketPath picks the first standard directory passing CheckDir, and a
+// allocSocketPath picks the first standard directory passing checkDir, and a
 // name carrying our pid — so a peer can attribute the inbox — plus a
 // discriminator, so it is not mistaken for a session's own.
 func allocSocketPath() (string, error) {
@@ -169,9 +169,9 @@ func allocSocketPath() (string, error) {
 	}
 	name := fmt.Sprintf("%d-%08x.sock", os.Getpid(), binary.BigEndian.Uint32(disc[:]))
 
-	dirs := SocketDirs()
+	dirs := socketDirs()
 	for _, dir := range dirs {
-		if CheckDir(dir) == nil {
+		if checkDir(dir) == nil {
 			return filepath.Join(dir, name), nil
 		}
 	}
@@ -183,18 +183,17 @@ func allocSocketPath() (string, error) {
 		if err := os.Chmod(dir, 0o700); err != nil {
 			continue
 		}
-		if CheckDir(dir) == nil {
+		if checkDir(dir) == nil {
 			return filepath.Join(dir, name), nil
 		}
 	}
 	return "", fmt.Errorf("no usable socket directory among %v", dirs)
 }
 
-// Path returns the bound socket path.
 func (s *Server) Path() string { return s.path }
 
 // Addr returns the inbox as a uds: reply address, ready to use as a From.
-func (s *Server) Addr() string { return UDSAddress(s.path) }
+func (s *Server) Addr() string { return udsAddress(s.path) }
 
 // PeerToken returns the token published for other sessions.
 func (s *Server) PeerToken() string { return s.token }
@@ -248,7 +247,7 @@ func (s *Server) Close() error {
 	err := s.ln.Close()
 	os.Remove(s.path)
 	if s.cfg.PublishKey {
-		RemoveKey(os.Getpid(), s.path)
+		removeKey(os.Getpid(), s.path)
 	}
 	return err
 }
@@ -299,8 +298,8 @@ func (s *Server) handleConn(ctx context.Context, conn *net.UnixConn) {
 	r := bufio.NewReaderSize(conn, 64<<10)
 	for {
 		line, complete, err := readLine(r, MaxLineBytes)
-		if errors.Is(err, ErrLineTooLong) {
-			s.drop(ctx, peer, nil, ErrLineTooLong)
+		if errors.Is(err, errLineTooLong) {
+			s.drop(ctx, peer, nil, errLineTooLong)
 			return
 		}
 		if len(line) > 0 {
@@ -332,7 +331,7 @@ const (
 // dispatch handles one line. isFirst allows the auth frame, which is consumed
 // here and never passed to a handler.
 func (s *Server) dispatch(ctx context.Context, peer *Peer, line []byte, isFirst bool) dispatchResult {
-	f, err := DecodeFrame(line)
+	f, err := decodeFrame(line)
 	if err != nil {
 		// A parse failure skips that line only.
 		s.drop(ctx, peer, line, err)
@@ -393,7 +392,7 @@ func readLine(r *bufio.Reader, max int) (line []byte, complete bool, err error) 
 	for {
 		chunk, err := r.ReadSlice('\n')
 		if len(buf)+len(chunk) > max {
-			return nil, false, ErrLineTooLong
+			return nil, false, errLineTooLong
 		}
 		buf = append(buf, chunk...)
 		if errors.Is(err, bufio.ErrBufferFull) {

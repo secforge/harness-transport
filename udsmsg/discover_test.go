@@ -62,7 +62,7 @@ func TestAlive(t *testing.T) {
 }
 
 func TestPIDDomainShape(t *testing.T) {
-	d, err := PIDDomain(os.Getpid())
+	d, err := pidDomain(os.Getpid())
 	if err != nil {
 		t.Skipf("pid domain unavailable: %v", err)
 	}
@@ -72,7 +72,7 @@ func TestPIDDomainShape(t *testing.T) {
 }
 
 func TestSocketDirsArePreferenceOrdered(t *testing.T) {
-	dirs := SocketDirs()
+	dirs := socketDirs()
 	if len(dirs) == 0 {
 		t.Fatal("no socket directories")
 	}
@@ -86,8 +86,8 @@ func TestSocketDirsArePreferenceOrdered(t *testing.T) {
 }
 
 func TestFindSocketOfAbsentPID(t *testing.T) {
-	if _, err := FindSocket(1 << 30); err == nil {
-		t.Error("FindSocket of a pid with no socket should fail")
+	if _, err := findSocket(1 << 30); err == nil {
+		t.Error("findSocket of a pid with no socket should fail")
 	}
 }
 
@@ -101,8 +101,8 @@ func TestOwnParentIsReachedWithTheChildToken(t *testing.T) {
 	// Bound at the canonical <pid>.sock, since that is the name
 	// ResolveTarget looks for — an allocated inbox carries a discriminator
 	// and is reached by path rather than by pid.
-	dir := SocketDirs()[0]
-	if CheckDir(dir) != nil {
+	dir := socketDirs()[0]
+	if checkDir(dir) != nil {
 		t.Skipf("no usable socket directory at %s", dir)
 	}
 	srv, err := Listen(Config{

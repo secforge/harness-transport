@@ -265,3 +265,22 @@ func TestCodexRefusesOversize(t *testing.T) {
 // Small filesystem helpers, kept here so the test file is self-contained.
 func mkdirAll(p string) error       { return os.MkdirAll(p, 0o700) }
 func symlink(from, to string) error { return os.Symlink(from, to) }
+
+// Adopt is documented as safe on every request, so a request carrying no
+// thread id must adopt nothing and report no error. A caller treating any
+// error as a refusal would otherwise tell its user delivery was refused
+// every time an ordinary request arrived.
+func TestAdoptIgnoresARequestWithNoThreadID(t *testing.T) {
+	c := newCodex("test")
+	for _, meta := range []map[string]any{nil, {}, {"itemId": "x"}} {
+		if err := c.Adopt(meta); err != nil {
+			t.Errorf("Adopt(%v) = %v, want nothing adopted and no error", meta, err)
+		}
+	}
+	if c.thread != "" {
+		t.Errorf("thread = %q; nothing should have been adopted", c.thread)
+	}
+	if err := c.Adopt(map[string]any{"threadId": 42}); err == nil {
+		t.Error("a malformed thread id is still an error")
+	}
+}

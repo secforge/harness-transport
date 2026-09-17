@@ -30,9 +30,9 @@ func ProcStart(pid int) (string, error) {
 	return fields[startTimeIdx], nil
 }
 
-// MachineID returns the host's machine id, the middle component of a pid
+// machineID returns the host's machine id, the middle component of a pid
 // domain.
-func MachineID() (string, error) {
+func machineID() (string, error) {
 	for _, p := range []string{"/etc/machine-id", "/var/lib/dbus/machine-id"} {
 		b, err := os.ReadFile(p)
 		if err == nil {
@@ -44,11 +44,11 @@ func MachineID() (string, error) {
 	return "", fmt.Errorf("no machine id found")
 }
 
-// PIDDomain returns the namespace-qualified pid space of a process, e.g.
+// pidDomain returns the namespace-qualified pid space of a process, e.g.
 // "linux:<machine-id>:pid:[4026532231]". It exists so an identical pid in a
 // different namespace cannot impersonate a session.
-func PIDDomain(pid int) (string, error) {
-	id, err := MachineID()
+func pidDomain(pid int) (string, error) {
+	id, err := machineID()
 	if err != nil {
 		return "", err
 	}

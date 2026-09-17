@@ -7,12 +7,9 @@ import (
 	"io/fs"
 )
 
-// ownerUID has no meaning here: Windows does not express file ownership as a
-// numeric uid, and the directory check this feeds exists to establish that a
-// socket directory belongs to us and nobody else.
-//
-// It fails rather than returning 0, which would compare equal to root and
-// quietly turn an ownership check into a check that passes.
+// ownerUID has no meaning here: Windows does not express ownership as a uid.
+// It fails rather than returning 0, which compares equal to root and would
+// turn the directory check into one that always passes.
 func ownerUID(fi fs.FileInfo) (uint32, error) {
 	return 0, fmt.Errorf("file ownership cannot be read as a uid on this platform, so %s cannot be verified", fi.Name())
 }

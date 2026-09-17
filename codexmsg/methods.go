@@ -32,7 +32,6 @@ type Capabilities struct {
 	ExperimentalAPI bool `json:"experimentalApi,omitempty"`
 }
 
-// InitializeParams is the opening handshake.
 type InitializeParams struct {
 	ClientInfo   ClientInfo    `json:"clientInfo"`
 	Capabilities *Capabilities `json:"capabilities,omitempty"`
@@ -89,7 +88,6 @@ type QueuedSubmission struct {
 	ClientUserMessageID string      `json:"clientUserMessageId,omitempty"`
 }
 
-// ThreadQueueAddResult is the response to a queue add.
 type ThreadQueueAddResult struct {
 	QueuedSubmission QueuedSubmission `json:"queuedSubmission"`
 }

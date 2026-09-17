@@ -46,7 +46,6 @@ func (r RequestID) key() string {
 	return fmt.Sprintf("n:%d", r.Num)
 }
 
-// String renders the id for a message.
 func (r RequestID) String() string {
 	if r.Str != "" {
 		return r.Str
@@ -54,7 +53,6 @@ func (r RequestID) String() string {
 	return fmt.Sprintf("%d", r.Num)
 }
 
-// Request is a call that expects a response.
 type Request struct {
 	ID     RequestID       `json:"id"`
 	Method string          `json:"method"`
@@ -74,7 +72,6 @@ type Message struct {
 // IsResponse reports whether the message answers one of our requests.
 func (m *Message) IsResponse() bool { return m.ID != nil && m.Method == "" }
 
-// Error is a JSON-RPC error object.
 type Error struct {
 	Code    int64           `json:"code"`
 	Message string          `json:"message"`

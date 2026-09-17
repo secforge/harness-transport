@@ -267,8 +267,8 @@ func TestOversizeLineDropsConnection(t *testing.T) {
 			break // the server has already hung up
 		}
 	}
-	if err := c.nextDrop(t); !errors.Is(err, ErrLineTooLong) {
-		t.Errorf("drop reason = %v, want ErrLineTooLong", err)
+	if err := c.nextDrop(t); !errors.Is(err, errLineTooLong) {
+		t.Errorf("drop reason = %v, want errLineTooLong", err)
 	}
 }
 
@@ -350,8 +350,8 @@ func TestCloseRemovesSocketAndKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	name, _ := KeyFileName(os.Getpid(), path)
-	if _, err := os.Stat(filepath.Join(SessionsDir(), name)); err != nil {
+	name, _ := keyFileName(os.Getpid(), path)
+	if _, err := os.Stat(filepath.Join(sessionsDir(), name)); err != nil {
 		t.Fatalf("key file not published: %v", err)
 	}
 	if _, err := os.Stat(path); err != nil {
@@ -362,7 +362,7 @@ func TestCloseRemovesSocketAndKey(t *testing.T) {
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Error("socket left behind after Close")
 	}
-	if _, err := os.Stat(filepath.Join(SessionsDir(), name)); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(sessionsDir(), name)); !os.IsNotExist(err) {
 		t.Error("key file left behind after Close")
 	}
 	if err := srv.Close(); err != nil {
@@ -410,10 +410,10 @@ func TestAutoAllocatedPathIsDiscriminated(t *testing.T) {
 		t.Errorf("auto-allocated name %q lacks the discriminator that keeps it "+
 			"distinct from a real session inbox", base)
 	}
-	if !ValidAddress(srv.Addr()) {
+	if !validAddress(srv.Addr()) {
 		t.Errorf("auto-allocated inbox is not a well-shaped reply address: %q", srv.Addr())
 	}
-	if err := CheckDir(filepath.Dir(srv.Path())); err != nil {
+	if err := checkDir(filepath.Dir(srv.Path())); err != nil {
 		t.Errorf("auto-allocated inbox is not in a directory worth connecting to: %v", err)
 	}
 }

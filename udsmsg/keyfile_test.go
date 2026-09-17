@@ -11,7 +11,7 @@ import (
 
 func TestKeyFileNameIsSHA256OfCanonicalPath(t *testing.T) {
 	// The digest of "/tmp/cc-socks/1.sock", fixed by the protocol.
-	name, err := KeyFileName(1, "/tmp/cc-socks/1.sock")
+	name, err := keyFileName(1, "/tmp/cc-socks/1.sock")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -23,7 +23,7 @@ func TestKeyFileNameIsSHA256OfCanonicalPath(t *testing.T) {
 		t.Fatalf("digest component %q is not 64 hex characters", parts[1])
 	}
 	// A non-canonical spelling of the same path must hash identically.
-	same, err := KeyFileName(1, "/tmp/cc-socks/./1.sock")
+	same, err := keyFileName(1, "/tmp/cc-socks/./1.sock")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,7 +36,7 @@ func TestKeyFileNameIsSHA256OfCanonicalPath(t *testing.T) {
 // Claude Code itself published on this host. It is the strongest available
 // confirmation that the digest is computed over the right string.
 func TestKeyFileNameMatchesLiveSessions(t *testing.T) {
-	ents, err := os.ReadDir(SessionsDir())
+	ents, err := os.ReadDir(sessionsDir())
 	if err != nil {
 		t.Skip("no session registry on this host")
 	}
@@ -54,7 +54,7 @@ func TestKeyFileNameMatchesLiveSessions(t *testing.T) {
 		if err != nil {
 			continue
 		}
-		b, err := os.ReadFile(filepath.Join(SessionsDir(), pidStr+".json"))
+		b, err := os.ReadFile(filepath.Join(sessionsDir(), pidStr+".json"))
 		if err != nil {
 			continue // key file without a registry entry
 		}
@@ -62,7 +62,7 @@ func TestKeyFileNameMatchesLiveSessions(t *testing.T) {
 		if err := json.Unmarshal(b, &r); err != nil || r.MessagingSocketPath == "" {
 			continue
 		}
-		got, err := KeyFileName(pid, r.MessagingSocketPath)
+		got, err := keyFileName(pid, r.MessagingSocketPath)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -82,21 +82,21 @@ func TestWriteReadRemoveKey(t *testing.T) {
 	t.Setenv("HOME", dir)
 
 	sock := filepath.Join(dir, "7.sock")
-	want := &Key{PeerToken: NewToken(), ProcStart: "1162506", PIDDomain: "linux:abc:pid:[4026532231]"}
-	if err := WriteKey(7, sock, want); err != nil {
+	want := &Key{PeerToken: newToken(), ProcStart: "1162506", PIDDomain: "linux:abc:pid:[4026532231]"}
+	if err := writeKey(7, sock, want); err != nil {
 		t.Fatal(err)
 	}
 
 	// The sessions directory must not be readable by other users.
-	fi, err := os.Stat(SessionsDir())
+	fi, err := os.Stat(sessionsDir())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if fi.Mode().Perm() != 0o700 {
 		t.Errorf("sessions dir mode = %#o, want 0700", fi.Mode().Perm())
 	}
-	name, _ := KeyFileName(7, sock)
-	kf, err := os.Stat(filepath.Join(SessionsDir(), name))
+	name, _ := keyFileName(7, sock)
+	kf, err := os.Stat(filepath.Join(sessionsDir(), name))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,17 +113,17 @@ func TestWriteReadRemoveKey(t *testing.T) {
 	}
 
 	// No temporary file may survive the atomic write.
-	ents, _ := os.ReadDir(SessionsDir())
+	ents, _ := os.ReadDir(sessionsDir())
 	for _, e := range ents {
 		if strings.Contains(e.Name(), ".tmp.") {
 			t.Errorf("temporary file %s left behind", e.Name())
 		}
 	}
 
-	if err := RemoveKey(7, sock); err != nil {
+	if err := removeKey(7, sock); err != nil {
 		t.Fatal(err)
 	}
-	if err := RemoveKey(7, sock); err != nil {
+	if err := removeKey(7, sock); err != nil {
 		t.Errorf("removing an absent key = %v, want nil", err)
 	}
 }
@@ -145,12 +145,12 @@ func TestReadKeyRejectsOversizeFile(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 	sock := filepath.Join(dir, "8.sock")
-	name, _ := KeyFileName(8, sock)
-	if err := os.MkdirAll(SessionsDir(), 0o700); err != nil {
+	name, _ := keyFileName(8, sock)
+	if err := os.MkdirAll(sessionsDir(), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	big := make([]byte, maxKeyFileBytes+1)
-	if err := os.WriteFile(filepath.Join(SessionsDir(), name), big, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(sessionsDir(), name), big, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := ReadKey(8, sock); err == nil {
@@ -159,11 +159,11 @@ func TestReadKeyRejectsOversizeFile(t *testing.T) {
 }
 
 func TestNewTokenIs32Hex(t *testing.T) {
-	tok := NewToken()
+	tok := newToken()
 	if len(tok) != 32 || strings.Trim(tok, "0123456789abcdef") != "" {
 		t.Errorf("token %q is not 32 hex characters", tok)
 	}
-	if NewToken() == tok {
+	if newToken() == tok {
 		t.Error("tokens must not repeat")
 	}
 }

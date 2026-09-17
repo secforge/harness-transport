@@ -3,10 +3,8 @@ package udsmsg
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net"
-	"os"
 	"time"
 )
 
@@ -70,27 +68,8 @@ func Dial(ctx context.Context, t Target) (*Client, error) {
 	return c, nil
 }
 
-// DialPID resolves a session by pid and connects to it.
-func DialPID(ctx context.Context, pid int) (*Client, error) {
-	t, err := ResolveTarget(pid)
-	if err != nil {
-		return nil, err
-	}
-	return Dial(ctx, t)
-}
-
 // Target returns the destination this client is connected to.
 func (c *Client) Target() Target { return c.target }
-
-// PresentedToken reports whether this connection sent an auth frame. It is a
-// fact about what we did, NOT a verdict: a wrong token presents exactly as a
-// right one, and nothing on the wire distinguishes them where auth is
-// optional. Measured against a live 2.1.272 session — right token, wrong
-// token and no token all left the connection open and indistinguishable.
-//
-// It was called Authenticated for about ten minutes, which claimed a result
-// this side cannot observe. See Dial and CheckAccepted for what can be.
-func (c *Client) PresentedToken() bool { return c.target.Token != "" }
 
 // Send writes one frame as a single line.
 func (c *Client) Send(f *Frame) error {
@@ -102,47 +81,6 @@ func (c *Client) Send(f *Frame) error {
 		return fmt.Errorf("write frame: %w", err)
 	}
 	return nil
-}
-
-// CheckAccepted reports whether the receiver has REJECTED what we sent, by
-// waiting to see whether it closes the connection.
-//
-// There is no positive acknowledgement to wait for: nothing is ever sent back
-// on this socket — a status, an idle notice or a reply all go to the address
-// in `from`, on a connection of their own — so a read here blocks forever
-// while the receiver is content. What a rejecting receiver does instead is
-// destroy the connection: a receiver that requires authentication, given a missing or wrong token, drops
-// every line and closes, as does a session_id mismatch or an oversize line,
-// and none of them says why.
-//
-// So this turns that silence into a signal. nil means the receiver had not
-// closed the connection within wait, which is the most that can be observed
-// from here — it is NOT proof the message reached anyone, and it cannot
-// distinguish "authenticated successfully" from "authentication was not
-// required", because those look identical on the wire and on every platform
-// where auth is optional they are the same thing.
-//
-// A non-nil error means the connection went away right after we spoke, and on
-// a receiver that requires authentication an unauthenticated client gets
-// exactly that with nothing else. Call PresentedToken to know whether a token
-// was even presented, which is what decides how to phrase the diagnosis.
-func (c *Client) CheckAccepted(wait time.Duration) error {
-	if err := c.conn.SetReadDeadline(time.Now().Add(wait)); err != nil {
-		return err
-	}
-	defer c.conn.SetReadDeadline(time.Time{})
-	var discard [1]byte
-	_, err := c.conn.Read(discard[:])
-	switch {
-	case err == nil:
-		// Unexpected: nothing is supposed to arrive here. Not a rejection.
-		return nil
-	case errors.Is(err, os.ErrDeadlineExceeded):
-		return nil // still open, which is as much as silence can say
-	default:
-		return fmt.Errorf("the receiver closed the connection immediately after our frames, "+
-			"which is what it does when it refuses them and it sends no reason: %w", err)
-	}
 }
 
 // Close closes the connection. The receiver parses any trailing buffer before
@@ -173,8 +111,7 @@ type User struct {
 	Attribution *CrossSession
 	// Priority places the prompt in the receiver's queue. Defaults to
 	// PriorityNext, what a session sends.
-	Priority    string
-	Attachments []Attachment
+	Priority string
 }
 
 // SendUser injects a prompt and returns the message id it was sent under.
@@ -219,16 +156,15 @@ func BuildUserFrame(u *User) (*Frame, error) {
 		content = u.Attribution.Wrap(content)
 	}
 	return &Frame{
-		MsgV:            MsgVersion,
-		Type:            TypeUser,
-		MsgID:           u.MsgID,
-		From:            u.From,
-		FromMode:        u.FromMode,
-		Priority:        u.Priority,
-		SessionID:       u.SessionID,
-		Message:         &UserMessage{Role: "user", Content: content},
-		FileAttachments: u.Attachments,
-		UUID:            u.UUID,
+		MsgV:      MsgVersion,
+		Type:      TypeUser,
+		MsgID:     u.MsgID,
+		From:      u.From,
+		FromMode:  u.FromMode,
+		Priority:  u.Priority,
+		SessionID: u.SessionID,
+		Message:   &UserMessage{Role: "user", Content: content},
+		UUID:      u.UUID,
 	}, nil
 }
 
@@ -250,40 +186,4 @@ func EncodedUserSize(u User) (size int, fits bool, err error) {
 	}
 	size = len(b) + 1 // the newline EncodeFrame appends
 	return size, size <= MaxLineBytes, nil
-}
-
-// SendControl writes a control frame, filling in the type.
-func (c *Client) SendControl(f *Frame) error {
-	f.Type = TypeControl
-	if f.Action == "" {
-		return fmt.Errorf("control frame needs an action")
-	}
-	return c.Send(f)
-}
-
-// Rename renames the receiving session.
-func (c *Client) Rename(name string) error {
-	if name == "" {
-		return fmt.Errorf("rename needs a name")
-	}
-	return c.SendControl(&Frame{Action: ActionRename, Name: name})
-}
-
-// NotifyWhenIdle subscribes to the receiver's next idle moment. The
-// subscription is dropped by the receiver if from is unshaped, outside the
-// socket namespace, or resolves to the sender itself.
-func (c *Client) NotifyWhenIdle(from, msgID string, mode Mode) error {
-	if _, err := ResolveReplyAddr(from); err != nil {
-		return fmt.Errorf("notify_when_idle reply address: %w", err)
-	}
-	if msgID == "" {
-		return fmt.Errorf("notify_when_idle needs a msg_id")
-	}
-	return c.SendControl(&Frame{Action: ActionNotifyWhenIdle, From: from, MsgID: msgID, FromMode: mode})
-}
-
-// SendPeerMessageStatus reports delivery feedback for an earlier send.
-func (c *Client) SendPeerMessageStatus(f *Frame) error {
-	f.Action = ActionPeerMessageStatus
-	return c.SendControl(f)
 }

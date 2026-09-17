@@ -4,16 +4,6 @@ import (
 	"errors"
 )
 
-// AuthIdentity is the identity a connection established by presenting a
-// token. Both peer and child tokens are accepted.
-type AuthIdentity string
-
-const (
-	AuthNone  AuthIdentity = ""
-	AuthPeer  AuthIdentity = "peer"
-	AuthChild AuthIdentity = "child"
-)
-
 // Peer is the verified identity of a connected client, derived from the
 // socket's credentials independently of any token it presented.
 type Peer struct {
@@ -27,8 +17,10 @@ type Peer struct {
 	// ProcStart is the peer's start time, read from /proc at accept time to
 	// defeat pid reuse. Empty if the process had already exited.
 	ProcStart string
-	// Auth is the identity established by the auth frame, if any.
-	Auth AuthIdentity
+	// Authed reports that the connection presented a valid token. Which of
+	// the accepted tokens it was is not recorded: both authenticate, and
+	// nothing observed distinguishes what follows.
+	Authed bool
 	// SelfSent marks a message that appears to originate from the receiver
 	// itself.
 	SelfSent bool
@@ -42,7 +34,7 @@ type Peer struct {
 }
 
 // Authenticated reports whether the connection presented a valid token.
-func (p *Peer) Authenticated() bool { return p.Auth != AuthNone }
+func (p *Peer) Authenticated() bool { return p.Authed }
 
 // ErrPeerCredsUnavailable is returned by peerCred where the operating system
 // exposes no way to ask the kernel who is on the other end of a socket.

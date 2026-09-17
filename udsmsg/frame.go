@@ -20,49 +20,16 @@ const MaxLineBytes = 1 << 20
 
 // Frame types.
 const (
-	TypeAuth    = "auth"
-	TypeUser    = "user"
-	TypeControl = "control"
+	TypeAuth = "auth"
+	TypeUser = "user"
 )
 
-// Control actions dispatched by a session.
-const (
-	ActionRename                 = "rename"
-	ActionPeerMessageStatus      = "peer_message_status"
-	ActionNotifyWhenIdle         = "notify_when_idle"
-	ActionPeerIdleNotice         = "peer_idle_notice"
-	ActionYieldArtifactReplies   = "yield_artifact_replies"
-	ActionUnyieldArtifactReplies = "unyield_artifact_replies"
-	ActionArtifactRepliesYielded = "artifact_replies_yielded"
-)
-
-// Statuses carried by a peer_message_status frame.
-const (
-	StatusHeld      = "held"
-	StatusDenied    = "denied"
-	StatusExpired   = "expired"
-	StatusDelivered = "delivered"
-	StatusRefused   = "refused"
-	StatusDropped   = "dropped"
-)
-
-// Mode is a sender's permission posture, used by the receiver for
-// permission-mode parity. A "bypass" sender's message may be held.
+// Mode is a sender's permission posture, carried as from_mode. Sessions
+// observed here send exactly one value, and it is the only one this package
+// will put on the wire: a posture it cannot attest is not asserted at all.
 type Mode string
 
-const (
-	ModePrompting Mode = "prompting"
-	ModeBypass    Mode = "bypass"
-)
-
-// Attachment is one element of a user frame's file_attachments.
-type Attachment struct {
-	FileUUID string `json:"file_uuid"`
-	FileName string `json:"file_name"`
-	IsImage  bool   `json:"is_image,omitempty"`
-	SHA256   string `json:"sha256,omitempty"`
-	FileSize int64  `json:"file_size,omitempty"`
-}
+const ModePrompting Mode = "prompting"
 
 // UserMessage is the prompt payload of a user frame.
 type UserMessage struct {
@@ -70,14 +37,8 @@ type UserMessage struct {
 	Content string `json:"content"`
 }
 
-// Requester is the optional origin record on a yield_artifact_replies frame.
-type Requester struct {
-	CWD  string `json:"cwd,omitempty"`
-	Tmux string `json:"tmux,omitempty"`
-}
-
-// Frame is one protocol line. It is a union over every frame kind: only the
-// fields relevant to Type and Action are populated. Unknown fields survive a
+// Frame is one protocol line. Only the fields relevant to Type are
+// populated. Unknown fields survive a
 // round trip in Raw, which holds the line exactly as received.
 type Frame struct {
 	MsgV      int    `json:"msgV,omitempty"`
@@ -92,49 +53,11 @@ type Frame struct {
 	Token string `json:"token,omitempty"`
 
 	// type=user
-	Message         *UserMessage `json:"message,omitempty"`
-	FileAttachments []Attachment `json:"file_attachments,omitempty"`
+	Message *UserMessage `json:"message,omitempty"`
 	// UUID becomes the injected prompt's uuid. Unlike MsgID it is not
 	// validated and is no use as a correlation handle; omitted, the receiver
 	// generates one.
 	UUID string `json:"uuid,omitempty"`
-
-	// type=control
-	Action string `json:"action,omitempty"`
-
-	// action=rename
-	Name string `json:"name,omitempty"`
-
-	// action=peer_message_status
-	Status       string `json:"status,omitempty"`
-	StatusDetail string `json:"status_detail,omitempty"`
-	Reason       string `json:"reason,omitempty"`
-	// Cause names the branch that produced a held status, where Reason is
-	// only the fixed prose shown to a user. It is the field that says WHY,
-	// and the difference matters: a hold blamed on permission-mode parity
-	// and one caused by a setting delivered remotely carry identical prose.
-	// Reported values include mode-mismatch, no-mode-asserted, bypass-default,
-	// mode-unknown, and explicit-, managed-, repo- and invalid-setting;
-	// treat it as an open vocabulary and log what arrives.
-	Cause         string   `json:"cause,omitempty"`
-	OrigMsgID     string   `json:"orig_msg_id,omitempty"`
-	DropReason    string   `json:"drop_reason,omitempty"`
-	DroppedMsgIDs []string `json:"dropped_msg_ids,omitempty"`
-
-	// action=peer_idle_notice
-	State      string   `json:"state,omitempty"`
-	FinishedAt *float64 `json:"finished_at,omitempty"`
-	Detail     string   `json:"detail,omitempty"`
-
-	// action=yield_artifact_replies / unyield / yielded
-	Slugs     []string        `json:"slugs,omitempty"`
-	SentAt    *float64        `json:"sent_at,omitempty"`
-	ClaimedAt *float64        `json:"claimed_at,omitempty"`
-	Requester *Requester      `json:"requester,omitempty"`
-	Stopped   *bool           `json:"stopped,omitempty"`
-	Yielded   json.RawMessage `json:"yielded,omitempty"`
-	NotHeld   json.RawMessage `json:"not_held,omitempty"`
-	Refused   json.RawMessage `json:"refused,omitempty"`
 
 	// Raw is the undecoded line. Set on receive, ignored on send.
 	Raw json.RawMessage `json:"-"`

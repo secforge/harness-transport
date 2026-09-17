@@ -9,19 +9,21 @@ import (
 	"strings"
 )
 
-// Address schemes accepted as a reply target.
-const (
-	SchemeUDS    = "uds"
-	SchemeBridge = "bridge"
-	SchemeDID    = "did"
-)
+// SchemeUDS is the only reply-address scheme observed on this transport.
+const SchemeUDS = "uds"
 
-// addrRe mirrors the receiver's reply-address guard.
-var addrRe = regexp.MustCompile(`^(?:uds|bridge|did):.{1,200}$`)
+// addrRe is the reply-address shape this package accepts. Observed addresses
+// are uds:, and nothing else is recognised: an address shape accepted here is
+// one this package is willing to resolve and send to.
+var addrRe = regexp.MustCompile(`^uds:.{1,200}$`)
 
-// sockNameRe mirrors the accepted socket file names: a plain pid, a pid with
-// an 8-hex discriminator, or a 16-hex opaque id.
-var sockNameRe = regexp.MustCompile(`^(\d+(-[0-9a-f]{8})?|[0-9a-f]{1,16})\.sock$`)
+// dialNameRe is what this package will CONNECT TO. It is deliberately wider:
+// refusing to answer an address because its name is unfamiliar costs a reply,
+// while the name itself grants nothing — safety here comes from the directory
+// being 0700 and ours (CheckDir) and from the kernel's credentials, not from
+// the spelling. It still excludes anything that is not a plain ".sock" leaf:
+// no separators, no traversal, no empty stem.
+var dialNameRe = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}\.sock$`)
 
 // ValidAddress reports whether addr is a well-shaped reply address. Shape is
 // necessary but not sufficient: a uds: target must also resolve inside one of
@@ -39,11 +41,14 @@ func ParseUDS(addr string) (path string, ok bool) {
 	return strings.TrimPrefix(addr, SchemeUDS+":"), true
 }
 
-// ValidSocketName reports whether name is an acceptable socket file name.
-func ValidSocketName(name string) bool { return sockNameRe.MatchString(name) }
+// ValidSocketName reports whether name is one this package will connect to.
+func ValidSocketName(name string) bool {
+	return name != ".sock" && !strings.Contains(name, "..") && dialNameRe.MatchString(name)
+}
 
-// PIDFromSocketName returns the pid encoded in a socket file name. Opaque
-// 16-hex names carry no pid and return ok == false.
+// PIDFromSocketName returns the pid encoded in a socket file name. A name that
+// does not carry one returns ok == false, which is not an error: a peer may
+// name its inbox anything, and the pid is simply unavailable then.
 func PIDFromSocketName(name string) (pid int, ok bool) {
 	if !ValidSocketName(name) {
 		return 0, false

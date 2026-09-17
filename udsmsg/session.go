@@ -109,30 +109,6 @@ func mcpEntryName(harnessName, mcpName string) string {
 	return harnessName + " · mcp:" + mcpName
 }
 
-// ParentSessionName returns the name of the session that spawned this
-// process, read from its registry entry. Empty when there is no parent, no
-// entry, or the entry carries no name — all of which are ordinary, so a
-// caller should compose something usable rather than treating it as failure.
-func ParentSessionName() string {
-	sock := os.Getenv(EnvMessagingSocket)
-	if sock == "" {
-		return ""
-	}
-	pid, ok := PIDFromSocketName(filepath.Base(sock))
-	if !ok {
-		return ""
-	}
-	b, err := os.ReadFile(sessionEntryPath(pid))
-	if err != nil {
-		return ""
-	}
-	var e SessionEntry
-	if err := json.Unmarshal(b, &e); err != nil {
-		return ""
-	}
-	return e.Name
-}
-
 // sessionEntryPath is the registry file for a pid.
 func sessionEntryPath(pid int) string {
 	return filepath.Join(SessionsDir(), fmt.Sprintf("%d.json", pid))

@@ -23,8 +23,8 @@ type claudeBackend struct {
 	// Empty means one-way, which is the default.
 	replyTo string
 	// mode is this process's asserted permission posture, or empty for no
-	// claim. See WithAssertedMode: empty means a bypass-mode receiver holds the
-	// message, which is the honest outcome when the posture is unknown.
+	// claim — the honest value when the posture cannot be established, and
+	// the one that risks a hold rather than a false statement.
 	mode udsmsg.Mode
 
 	mu   sync.Mutex

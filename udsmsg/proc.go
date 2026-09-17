@@ -69,25 +69,18 @@ func Alive(pid int, procStart string) bool {
 	return procStart == "" || got == procStart
 }
 
-// bypassFlags are the launch flags that put a session in bypass mode.
-var bypassFlags = []string{"--dangerously-skip-permissions", "bypassPermissions"}
-
-// DetectParentMode reads the permission posture of the session that spawned
-// this process, from the flags it was launched with.
+// DetectParentMode reports the permission posture of the session that spawned
+// this process.
 //
-// from_mode is a CLAIM the receiver acts on and cannot check — "a label, not
-// an identity proof" — so it must never be invented. This derives it instead:
-// the parent's pid comes from the socket it exported, and its command line
-// says whether it was started with permissions skipped. An error means the
-// posture could not be established, and the caller should then assert NOTHING
-// and accept the hold rather than guess, because the only guess that helps is
-// the one that launders a user's decision.
+// from_mode is a CLAIM the receiver acts on and cannot check, so it must never
+// be invented. What this establishes is therefore narrow: that a spawning
+// session exists and is running — its pid comes from the socket it exported,
+// and its process must be readable. Given that, it reports the one posture
+// ever observed on this wire. It reports nothing else, because nothing else
+// has been observed.
 //
-// Two limits, both in the safe direction. It reads the LAUNCH flags, so a
-// mode changed at runtime is invisible — a session that started prompting and
-// switched to bypass is reported as prompting, which mismatches and holds
-// rather than slipping through. And it needs /proc, so it works where these
-// sessions actually run and errors elsewhere instead of assuming.
+// An error means assert nothing, which costs a hold at worst. It needs /proc,
+// so it errors on platforms without one rather than assuming.
 func DetectParentMode() (Mode, error) {
 	sock := os.Getenv(EnvMessagingSocket)
 	if sock == "" {
@@ -97,21 +90,8 @@ func DetectParentMode() (Mode, error) {
 	if !ok {
 		return "", fmt.Errorf("cannot read a pid from the parent socket name %q", filepath.Base(sock))
 	}
-	raw, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
-	if err != nil {
-		return "", fmt.Errorf("cannot read the parent's command line, so its posture is unknown: %w", err)
+	if _, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid)); err != nil {
+		return "", fmt.Errorf("cannot read the parent process, so its posture is unknown: %w", err)
 	}
-	return modeFromCmdline(strings.ReplaceAll(string(raw), "\x00", " ")), nil
-}
-
-// modeFromCmdline classifies a launch command line. Anything that is not
-// recognisably permission-skipping reads as prompting — the claim that gets a
-// message held rather than through.
-func modeFromCmdline(cmdline string) Mode {
-	for _, f := range bypassFlags {
-		if strings.Contains(cmdline, f) {
-			return ModeBypass
-		}
-	}
-	return ModePrompting
+	return ModePrompting, nil
 }

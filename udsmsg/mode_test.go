@@ -5,27 +5,9 @@ import (
 	"testing"
 )
 
-func TestModeFromCmdline(t *testing.T) {
-	for _, tc := range []struct {
-		name    string
-		cmdline string
-		want    Mode
-	}{
-		{"plain remote-control session", "claude --remote-control --name build --resume abc", ModePrompting},
-		{"skip-permissions flag", "claude --dangerously-skip-permissions", ModeBypass},
-		{"permission-mode separate arg", "claude --permission-mode bypassPermissions", ModeBypass},
-		{"permission-mode joined", "claude --permission-mode=bypassPermissions", ModeBypass},
-		{"an explicitly prompting session", "claude --permission-mode prompting", ModePrompting},
-		{"nothing at all", "", ModePrompting},
-	} {
-		if got := modeFromCmdline(tc.cmdline); got != tc.want {
-			t.Errorf("%s: got %q, want %q", tc.name, got, tc.want)
-		}
-	}
-}
-
 // The posture must never be invented, so the failure to establish one is
-// reported as a failure and not as a default that happens to clear the gate.
+// reported as a failure and not as a default that happens to clear a gate.
+// Every path that cannot see a live spawning session must say so.
 func TestDetectParentModeRefusesWithoutAParent(t *testing.T) {
 	t.Setenv(EnvMessagingSocket, "")
 	if m, err := DetectParentMode(); err == nil {

@@ -58,7 +58,7 @@ func TestKeyFileNameMatchesLiveSessions(t *testing.T) {
 		if err != nil {
 			continue // key file without a registry entry
 		}
-		var r registryEntry
+		var r SessionEntry
 		if err := json.Unmarshal(b, &r); err != nil || r.MessagingSocketPath == "" {
 			continue
 		}

@@ -85,47 +85,9 @@ func TestSocketDirsArePreferenceOrdered(t *testing.T) {
 	}
 }
 
-// Discover must survive whatever is on the host, and must never report a
-// session as live unless /proc agrees.
-func TestDiscoverIsConsistent(t *testing.T) {
-	sessions, err := Discover()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, s := range sessions {
-		if s.PID <= 0 {
-			t.Errorf("session with pid %d", s.PID)
-		}
-		if s.Live && !Alive(s.PID, s.ProcStart) {
-			t.Errorf("pid %d reported live but /proc disagrees", s.PID)
-		}
-		if s.HasKey && s.SocketPath == "" {
-			t.Errorf("pid %d has a key but no socket", s.PID)
-		}
-	}
-	t.Logf("discovered %d sessions", len(sessions))
-}
-
 func TestFindSocketOfAbsentPID(t *testing.T) {
 	if _, err := FindSocket(1 << 30); err == nil {
 		t.Error("FindSocket of a pid with no socket should fail")
-	}
-}
-
-func TestTargetFromEnv(t *testing.T) {
-	t.Setenv("CLAUDE_CODE_MESSAGING_SOCKET", "/run/user/0/cc-socks/4242.sock")
-	t.Setenv("CLAUDE_CODE_MESSAGING_TOKEN", "abc123")
-	got, ok := TargetFromEnv()
-	if !ok {
-		t.Fatal("TargetFromEnv = false, want true")
-	}
-	if got.PID != 4242 || got.Token != "abc123" {
-		t.Errorf("TargetFromEnv = %+v", got)
-	}
-
-	t.Setenv("CLAUDE_CODE_MESSAGING_SOCKET", "")
-	if _, ok := TargetFromEnv(); ok {
-		t.Error("TargetFromEnv should report false without a socket path")
 	}
 }
 
@@ -134,8 +96,8 @@ func TestTargetFromEnv(t *testing.T) {
 // child token authenticates to the parent's inbox and nowhere else — and it
 // needs no configuration, which the key file does.
 //
-// It is NOT a way around the receiver's cross-session policy: that is decided
-// receive-side, on Linux by process ancestry rather than by the token.
+// Presenting it is not a way around anything the receiver decides for itself:
+// what it does with an authenticated connection is not observable from here.
 func TestOwnParentIsReachedWithTheChildToken(t *testing.T) {
 	// Bound at the canonical <pid>.sock, since that is the name
 	// ResolveTarget looks for — an allocated inbox carries a discriminator

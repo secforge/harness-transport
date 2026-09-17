@@ -37,13 +37,9 @@ func (c *collector) handler() Handler {
 		}
 	}
 	return Handler{
-		OnUser:              take,
-		OnRename:            take,
-		OnPeerMessageStatus: take,
-		OnNotifyWhenIdle:    take,
-		OnPeerIdleNotice:    take,
-		OnUnknown:           func(_ context.Context, _ *Peer, f *Frame) { c.unknown <- f },
-		OnDrop:              func(_ context.Context, _ *Peer, _ []byte, err error) { c.drops <- err },
+		OnUser:    take,
+		OnUnknown: func(_ context.Context, _ *Peer, f *Frame) { c.unknown <- f },
+		OnDrop:    func(_ context.Context, _ *Peer, _ []byte, err error) { c.drops <- err },
 	}
 }
 
@@ -148,8 +144,8 @@ func TestRoundTripUserFrame(t *testing.T) {
 	if p.ProcStart == "" {
 		t.Error("peer start time not recorded")
 	}
-	if p.Auth != AuthPeer {
-		t.Errorf("auth identity = %q, want %q", p.Auth, AuthPeer)
+	if !p.Authenticated() {
+		t.Error("a valid peer token should authenticate the connection")
 	}
 	if !p.SelfSent {
 		t.Error("a message from our own pid should be marked selfSent")
@@ -167,8 +163,8 @@ func TestChildTokenIsAccepted(t *testing.T) {
 		t.Fatal(err)
 	}
 	c.next(t)
-	if p := <-c.peers; p.Auth != AuthChild {
-		t.Errorf("auth identity = %q, want %q", p.Auth, AuthChild)
+	if p := <-c.peers; !p.Authenticated() {
+		t.Error("a valid child token should authenticate the connection")
 	}
 }
 
@@ -372,60 +368,6 @@ func TestFrameWithoutTypeIsDropped(t *testing.T) {
 	}
 }
 
-func TestRenameWithoutNameIsDropped(t *testing.T) {
-	srv, c := testServer(t, Config{})
-	conn := raw(t, srv.Path(), []byte(`{"type":"control","action":"rename"}`+"\n"))
-	defer conn.Close()
-	if err := c.nextDrop(t); !strings.Contains(err.Error(), "rename without a name") {
-		t.Errorf("drop reason = %v", err)
-	}
-}
-
-func TestControlHelpers(t *testing.T) {
-	srv, c := testServer(t, Config{})
-	cl, err := Dial(context.Background(), Target{SocketPath: srv.Path(), Unauthenticated: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cl.Close()
-
-	if err := cl.Rename("new-name"); err != nil {
-		t.Fatal(err)
-	}
-	if f := c.next(t); f.Action != ActionRename || f.Name != "new-name" {
-		t.Errorf("received %+v", f)
-	}
-	if err := cl.Rename(""); err == nil {
-		t.Error("an empty rename should be refused before it is sent")
-	}
-
-	status := &Frame{Status: StatusHeld, OrigMsgID: "m1", Reason: "awaiting approval"}
-	if err := cl.SendPeerMessageStatus(status); err != nil {
-		t.Fatal(err)
-	}
-	if f := c.next(t); f.Action != ActionPeerMessageStatus || f.Status != StatusHeld {
-		t.Errorf("received %+v", f)
-	}
-}
-
-// notify_when_idle needs a reply address inside the socket namespace; a
-// temp-dir socket is rejected before it goes on the wire.
-func TestNotifyWhenIdleValidatesReplyAddress(t *testing.T) {
-	srv, _ := testServer(t, Config{})
-	cl, err := Dial(context.Background(), Target{SocketPath: srv.Path(), Unauthenticated: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cl.Close()
-
-	if err := cl.NotifyWhenIdle(srv.Addr(), "m1", ModePrompting); err == nil {
-		t.Error("a socket outside the standard directories should be refused")
-	}
-	if err := cl.NotifyWhenIdle("uds:"+filepath.Join(SocketDirs()[0], "1.sock"), "", ModePrompting); err == nil {
-		t.Error("notify_when_idle without a msg_id should be refused")
-	}
-}
-
 func TestSendUserRejectsUnshapedReplyAddress(t *testing.T) {
 	srv, _ := testServer(t, Config{})
 	cl, err := Dial(context.Background(), Target{SocketPath: srv.Path(), Unauthenticated: true})
@@ -503,9 +445,6 @@ func TestAutoAllocatedPathIsDiscriminated(t *testing.T) {
 	}
 	defer srv.Close()
 	base := filepath.Base(srv.Path())
-	if !ValidSocketName(base) {
-		t.Errorf("auto-allocated name %q is not an acceptable socket name", base)
-	}
 	if !strings.Contains(base, "-") {
 		t.Errorf("auto-allocated name %q lacks the discriminator that keeps it "+
 			"distinct from a real session inbox", base)

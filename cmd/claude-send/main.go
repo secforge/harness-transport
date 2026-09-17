@@ -14,10 +14,8 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"sort"
 	"strings"
 	"syscall"
-	"text/tabwriter"
 	"time"
 
 	"github.com/secforge/harness-transport/udsmsg"
@@ -99,15 +97,12 @@ func defaultName(pid int) string {
 type options struct {
 	to         int
 	toSocket   string
-	list       bool
 	wait       string
 	timeout    time.Duration
-	fromMode   string
 	noAuth     bool
 	noHint     bool
 	jsonOut    bool
 	quiet      bool
-	all        bool
 	anySender  bool
 	name       string
 	announce   string
@@ -122,12 +117,9 @@ func run() int {
 	var o options
 	flag.IntVar(&o.to, "to", 0, "pid of the target session")
 	flag.StringVar(&o.toSocket, "to-socket", "", "socket path of the target inbox, instead of --to")
-	flag.BoolVar(&o.list, "list", false, "list live sessions and exit")
-	flag.BoolVar(&o.all, "all", false, "with --list, include sessions whose process is gone")
-	flag.StringVar(&o.wait, "wait", "reply", "what to wait for: reply, replies, idle, status, none")
+	flag.StringVar(&o.wait, "wait", "reply", "what to wait for: reply, replies, none")
 	flag.DurationVar(&o.timeout, "timeout", 5*time.Minute, "give up after this long; with --wait replies, how long to keep listening")
 	flag.BoolVar(&o.anySender, "any-sender", false, "accept frames from any process, not only the addressed one")
-	flag.StringVar(&o.fromMode, "from-mode", string(udsmsg.ModePrompting), "our permission posture: prompting or bypass")
 	flag.BoolVar(&o.noAuth, "no-auth", false, "dial without a token even if a key file exists; a receiver that requires authentication closes such a connection without a reason")
 	flag.BoolVar(&o.noHint, "no-hint", false, "send the bare text, without the cross-session attribution wrapper")
 	flag.StringVar(&o.name, "name", "", "how to identify ourselves in the message (default: claude-send in <dir>)")
@@ -138,9 +130,6 @@ func run() int {
 	flag.Usage = usage
 	flag.Parse()
 
-	if o.list {
-		return list(o.all)
-	}
 	text := strings.Join(flag.Args(), " ")
 	if text == "-" || (text == "" && !isTerminal(os.Stdin)) {
 		// A single argv string is capped at MAX_ARG_STRLEN (128 KiB on
@@ -162,15 +151,9 @@ func run() int {
 		return exitError
 	}
 	switch o.wait {
-	case "reply", "replies", "idle", "status", "none":
+	case "reply", "replies", "none":
 	default:
 		fmt.Fprintf(os.Stderr, "claude-send: unknown --wait %q\n", o.wait)
-		return exitError
-	}
-	switch udsmsg.Mode(o.fromMode) {
-	case udsmsg.ModePrompting, udsmsg.ModeBypass:
-	default:
-		fmt.Fprintf(os.Stderr, "claude-send: --from-mode must be prompting or bypass\n")
 		return exitError
 	}
 	return send(o, text)
@@ -201,59 +184,9 @@ func usage() {
 
   claude-send --to <pid> [flags] <message text>
   claude-send --to-socket <path> [flags] <message text>
-  claude-send --list
 
 `)
 	flag.PrintDefaults()
-}
-
-func list(all bool) int {
-	sessions, err := udsmsg.Discover()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "claude-send: %v\n", err)
-		return exitError
-	}
-	sort.SliceStable(sessions, func(i, j int) bool {
-		if sessions[i].Live != sessions[j].Live {
-			return sessions[i].Live
-		}
-		return sessions[i].PID < sessions[j].PID
-	})
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "PID\tSTATUS\tAUTH\tNAME\tCWD")
-	shown := 0
-	for _, s := range sessions {
-		if !s.Live && !all {
-			continue
-		}
-		shown++
-		status := s.Status
-		switch {
-		case !s.Live:
-			status = "dead"
-		case s.SocketPath == "":
-			status = "no-inbox"
-		case status == "":
-			status = "?"
-		}
-		auth := "none"
-		if s.HasKey {
-			auth = "key"
-		}
-		fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\n", s.PID, status, auth, dash(s.Name), dash(s.CWD))
-	}
-	w.Flush()
-	if shown == 0 {
-		fmt.Fprintln(os.Stderr, "no live sessions (use --all to include dead ones)")
-	}
-	return exitOK
-}
-
-func dash(s string) string {
-	if s == "" {
-		return "-"
-	}
-	return s
 }
 
 func send(o options, text string) int {
@@ -278,7 +211,13 @@ func send(o options, text string) int {
 	ctx, cancel := context.WithTimeout(ctx, o.timeout)
 	defer cancel()
 
-	mode := udsmsg.Mode(o.fromMode)
+	// Our own posture is derived, never stated: there is no flag for it,
+	// because a flag is a way to claim one. Undeterminable means we assert
+	// nothing and accept the hold.
+	mode, err := udsmsg.DetectParentMode()
+	if err != nil {
+		mode = ""
+	}
 	progress := func(format string, a ...any) {
 		if !o.quiet {
 			fmt.Fprintf(os.Stderr, format+"\n", a...)
@@ -302,10 +241,8 @@ func send(o options, text string) int {
 			}
 		}
 		h := udsmsg.Handler{
-			OnUser:              func(_ context.Context, p *udsmsg.Peer, f *udsmsg.Frame) { deliver(p, f) },
-			OnPeerMessageStatus: func(_ context.Context, p *udsmsg.Peer, f *udsmsg.Frame) { deliver(p, f) },
-			OnPeerIdleNotice:    func(_ context.Context, p *udsmsg.Peer, f *udsmsg.Frame) { deliver(p, f) },
-			OnError:             func(err error) { progress("claude-send: inbox: %v", err) },
+			OnUser:  func(_ context.Context, p *udsmsg.Peer, f *udsmsg.Frame) { deliver(p, f) },
+			OnError: func(err error) { progress("claude-send: inbox: %v", err) },
 		}
 		srv, err = udsmsg.Listen(udsmsg.Config{Handler: h, PublishKey: o.publishKey})
 		if err != nil {
@@ -354,9 +291,6 @@ func send(o options, text string) int {
 			text += fmt.Sprintf("\n\n[The sender is collecting replies at this address for the next %s; more than one is welcome.]", o.timeout)
 		}
 		attribution = &udsmsg.CrossSession{From: from, Name: name, Mode: mode}
-		if entry != nil {
-			attribution.Session = entry.SessionID
-		}
 	}
 
 	// Build the payload before connecting: a connection that has not
@@ -383,13 +317,6 @@ func send(o options, text string) int {
 	if o.wait == "none" {
 		return exitOK
 	}
-	// Subscribing to idle gives us a termination signal even when the peer
-	// never answers.
-	if from != "" {
-		if err := c.NotifyWhenIdle(from, msgID, mode); err != nil {
-			progress("claude-send: notify_when_idle: %v", err)
-		}
-	}
 	return await(ctx, o, replies, msgID, progress)
 }
 
@@ -403,10 +330,6 @@ func send(o options, text string) int {
 func await(ctx context.Context, o options, replies <-chan *udsmsg.Frame, msgID string,
 	progress func(string, ...any)) int {
 
-	// A peer that goes idle has finished its turn, so an answer is no longer
-	// coming — but one may still be in flight. Give it a moment to land.
-	const idleGrace = 750 * time.Millisecond
-	var idleDeadline <-chan time.Time
 	collecting := o.wait == "replies"
 	received := 0
 
@@ -420,69 +343,30 @@ func await(ctx context.Context, o options, replies <-chan *udsmsg.Frame, msgID s
 				}
 				return exitTimeout
 			}
-			if idleDeadline != nil {
-				return exitNoReply
-			}
 			progress("timed out after %s", o.timeout)
 			return exitTimeout
-
-		case <-idleDeadline:
-			progress("peer went idle without answering")
-			return exitNoReply
 
 		case f := <-replies:
 			if o.jsonOut {
 				fmt.Println(string(f.Raw))
 			}
-			switch {
-			case f.Type == udsmsg.TypeUser:
-				received++
-				if !o.jsonOut {
-					// A peer answers with the same attributed envelope we
-					// send, which is markup for a harness, not for a script.
-					cs, body, wrapped := udsmsg.Unwrap(f.Text())
-					if wrapped && cs.Name != "" {
-						progress("reply from %s", cs.Name)
-					}
-					fmt.Println(body)
-				}
-				if collecting {
-					// More may follow, and an idle notice no longer means
-					// nothing is coming: the peer can be woken again.
-					idleDeadline = nil
-					continue
-				}
-				return exitOK
-
-			case f.Action == udsmsg.ActionPeerMessageStatus:
-				if f.OrigMsgID != "" && f.OrigMsgID != msgID {
-					continue // status for someone else's message
-				}
-				progress("status: %s", describe(f))
-				switch f.Status {
-				case udsmsg.StatusDenied, udsmsg.StatusExpired,
-					udsmsg.StatusRefused, udsmsg.StatusDropped:
-					return exitRefused
-				case udsmsg.StatusDelivered:
-					if o.wait == "status" {
-						return exitOK
-					}
-				}
-
-			case f.Action == udsmsg.ActionPeerIdleNotice:
-				if f.OrigMsgID != "" && f.OrigMsgID != msgID {
-					continue
-				}
-				progress("peer idle (%s)", dash(f.State))
-				if o.wait == "idle" {
-					return exitOK
-				}
-				// While collecting, going idle ends nothing: the window is
-				// the whole point, and the peer may be woken again within it.
-				if idleDeadline == nil && !collecting {
-					idleDeadline = time.After(idleGrace)
-				}
+			if f.Type != udsmsg.TypeUser {
+				continue
 			}
+			received++
+			if !o.jsonOut {
+				// A peer answers with the same attributed envelope we
+				// send, which is markup for a harness, not for a script.
+				cs, body, wrapped := udsmsg.Unwrap(f.Text())
+				if wrapped && cs.Name != "" {
+					progress("reply from %s", cs.Name)
+				}
+				fmt.Println(body)
+			}
+			if collecting {
+				continue // more may follow within the window
+			}
+			return exitOK
 		}
 	}
 }
@@ -493,20 +377,4 @@ func plural(n int) string {
 		return "y"
 	}
 	return "ies"
-}
-
-// describe renders a status frame for the progress line.
-func describe(f *udsmsg.Frame) string {
-	var b strings.Builder
-	b.WriteString(f.Status)
-	if f.StatusDetail != "" {
-		fmt.Fprintf(&b, " (%s)", f.StatusDetail)
-	}
-	if f.DropReason != "" {
-		fmt.Fprintf(&b, " drop_reason=%s", f.DropReason)
-	}
-	if f.Reason != "" {
-		fmt.Fprintf(&b, ": %s", f.Reason)
-	}
-	return b.String()
 }

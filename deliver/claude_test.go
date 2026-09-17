@@ -209,8 +209,8 @@ func TestNoTokenMeansNoDelivery(t *testing.T) {
 }
 
 // A reply address makes a delivery answerable with the harness's ordinary
-// reply instead of a separate tool. It has to reach both places: the frame,
-// where delivery status goes, and the envelope, which is what the model sees.
+// reply instead of a separate tool. It has to reach both places it appears:
+// the frame, and the envelope, which is what the model sees.
 func TestAReplyAddressReachesFrameAndEnvelope(t *testing.T) {
 	p := startParent(t)
 	const inbox = "uds:/run/user/0/cc-socks/4242-a1b2c3d4.sock"
@@ -221,7 +221,7 @@ func TestAReplyAddressReachesFrameAndEnvelope(t *testing.T) {
 	}
 	f := p.received(t)
 	if f.From != inbox {
-		t.Errorf("frame from = %q, want the reply address — delivery status goes there", f.From)
+		t.Errorf("frame from = %q, want the reply address", f.From)
 	}
 	cs, _, wrapped := udsmsg.Unwrap(f.Text())
 	if !wrapped || cs.From != inbox {

@@ -30,39 +30,20 @@ func TestTextIsEmptyWithoutMessage(t *testing.T) {
 	}
 }
 
-func TestDecodeControlFrames(t *testing.T) {
-	cases := map[string]struct {
-		line   string
-		action string
-		check  func(*Frame) bool
-	}{
-		"rename": {`{"type":"control","action":"rename","name":"x"}`, ActionRename,
-			func(f *Frame) bool { return f.Name == "x" }},
-		"status": {`{"type":"control","action":"peer_message_status","status":"expired","status_detail":"refused","orig_msg_id":"m1"}`,
-			ActionPeerMessageStatus,
-			func(f *Frame) bool {
-				return f.Status == StatusExpired && f.StatusDetail == "refused" && f.OrigMsgID == "m1"
-			}},
-		"idle": {`{"type":"control","action":"peer_idle_notice","orig_msg_id":"m1","state":"idle","finished_at":1.5}`,
-			ActionPeerIdleNotice,
-			func(f *Frame) bool { return f.State == "idle" && f.FinishedAt != nil && *f.FinishedAt == 1.5 }},
-		"yielded": {`{"type":"control","action":"artifact_replies_yielded","orig_msg_id":"m1","yielded":["a"],"refused":[]}`,
-			ActionArtifactRepliesYielded,
-			func(f *Frame) bool { return string(f.Yielded) == `["a"]` }},
+// A frame this package does not model still decodes, carrying its type and
+// the whole line in Raw. Nothing is invented for it and nothing is rejected:
+// a caller that wants such a frame reads Raw.
+func TestUnmodelledFramesSurviveDecoding(t *testing.T) {
+	const line = `{"type":"control","action":"peer_message_status","orig_msg_id":"m1"}`
+	f, err := DecodeFrame([]byte(line))
+	if err != nil {
+		t.Fatal(err)
 	}
-	for name, tc := range cases {
-		t.Run(name, func(t *testing.T) {
-			f, err := DecodeFrame([]byte(tc.line))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if f.Action != tc.action {
-				t.Fatalf("Action = %q, want %q", f.Action, tc.action)
-			}
-			if !tc.check(f) {
-				t.Errorf("fields not decoded: %+v", f)
-			}
-		})
+	if f.Type != "control" {
+		t.Errorf("Type = %q, want the type as received", f.Type)
+	}
+	if string(f.Raw) != line {
+		t.Errorf("Raw = %s, want the line as received", f.Raw)
 	}
 }
 
@@ -89,15 +70,15 @@ func TestDecodeFrameRejectsGarbage(t *testing.T) {
 	}
 }
 
-// A msg_id the receiver's validator rejects cannot be correlated: status and
-// idle notices for it go unmatched, and nothing anywhere reports the problem.
-// The 32-hex form belongs to Windows pipe names, not to message ids.
-func TestNewMsgIDMatchesTheReceiversValidator(t *testing.T) {
+// Sessions were observed sending an RFC-4122 UUID as msg_id, so that is the
+// shape we generate. The 32-hex form that appears elsewhere in this protocol
+// is a Windows pipe name, not a message id.
+func TestNewMsgIDIsAUUID(t *testing.T) {
 	seen := map[string]bool{}
 	for i := 0; i < 100; i++ {
 		id := NewMsgID()
 		if !MsgIDPattern.MatchString(id) {
-			t.Fatalf("msg id %q would not be correlated by the receiver", id)
+			t.Fatalf("msg id %q is not the UUID shape sessions send", id)
 		}
 		if seen[id] {
 			t.Fatalf("duplicate msg id %q", id)
@@ -105,7 +86,7 @@ func TestNewMsgIDMatchesTheReceiversValidator(t *testing.T) {
 		seen[id] = true
 	}
 	if MsgIDPattern.MatchString(strings.Repeat("a", 32)) {
-		t.Error("32 hex should not satisfy the msg_id validator")
+		t.Error("32 hex is a pipe name, and should not pass as a msg_id")
 	}
 }
 

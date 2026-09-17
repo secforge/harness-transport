@@ -291,8 +291,7 @@ func WithReplyAddress(addr string) Option {
 //
 // This is the call to reach for. The posture is a CLAIM the receiver acts on
 // and cannot check, so the one safe way to produce it is to derive it: see
-// udsmsg.DetectParentMode for what it reads and the two ways it can be stale,
-// both of which fail toward a hold rather than through a gate.
+// udsmsg.DetectParentMode for what it establishes, which is narrow.
 //
 // When the posture cannot be established this asserts NOTHING rather than
 // guessing, and the message may then be held — which is the correct outcome,
@@ -307,25 +306,17 @@ func WithDetectedMode() Option {
 	}
 }
 
-// WithAssertedMode asserts this process's permission posture, which the
-// receiver uses to decide whether to deliver a message or park it for its
-// user. Prefer WithDetectedMode, which establishes the posture instead of
-// taking it on the caller's word.
+// WithAssertedMode asserts this process's permission posture. Prefer
+// WithDetectedMode, which establishes the posture instead of taking it on the
+// caller's word.
 //
-// The receiver's rule: a message whose asserted mode MATCHES its own is
-// accepted; one that differs is held; and one asserting NOTHING is held when
-// the receiver is in bypass and accepted when it is prompting. Since most
-// sessions run in bypass, asserting nothing usually means held — on an
-// interactive host that is an approval prompt, and on a headless one there is
-// no approval surface, so the hold expires and the message is lost. From the
-// sending side all three look like a successful write.
-//
-// So this is worth setting. It is also a CLAIM rather than a credential — the
-// receiver acts on it and cannot check it — which is why there is no default
-// and why nothing here infers one. Assert what is true of this process; where
-// that cannot be established, assert nothing and accept the hold. Asserting
-// bypass to clear a gate that exists for a user's benefit would be laundering
-// their decision, and a message parked is better than a permission bypassed.
+// The posture is a CLAIM rather than a credential: the receiver acts on it and
+// cannot check it, which is why there is no default and why nothing here
+// infers one. udsmsg.ModePrompting is the only value this library will put on
+// the wire, because it is the only one observed on it; a process that cannot
+// establish its posture asserts nothing, which costs a hold at worst. Naming a
+// posture to clear a gate that exists for a user's benefit would be laundering
+// their decision, and a message parked is better than a permission spent.
 func WithAssertedMode(m udsmsg.Mode) Option {
 	return func(o *options) { o.mode = m }
 }

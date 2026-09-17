@@ -66,14 +66,43 @@ The 64-hex component is `sha256` of the **canonical socket path** (on Windows,
 of `\\.\pipe\<name>`), which binds a key file to one specific socket — verified by
 recomputing the hash against every sampled file.
 
-The file contains the peer token:
+The file contains the peer token and two fields identifying the process that
+published it:
 
 [source,json]
 ----
 {
-  "peerToken": "2f6c…"                     // 32 hex chars
+  "peerToken": "2f6c…",
+  "procStart": "1162506",
+  "pidDomain": "linux:0d9fbc47a1e34b0f8f2c5e6d7a8b9c01:pid:[4026531836]"
 }
 ----
+
+[cols="1,4"]
+|===
+| Field | Value
+
+| `peerToken`
+| 32 hex chars.
+
+| `procStart`
+| The publishing process's start time: field 22 of `/proc/<pid>/stat`, in clock
+  ticks since boot. Note that field is counted from the *last* `)` in that
+  file, because the command name preceding it may itself contain spaces and
+  parentheses.
+
+| `pidDomain`
+| Three colon-separated parts: the literal `linux`, the host's machine id
+  (`/etc/machine-id`, falling back to `/var/lib/dbus/machine-id`), and the pid
+  namespace as `readlink /proc/<pid>/ns/pid` reports it — a symlink whose
+  target has the form `pid:[<inode>]`.
+|===
+
+All three fields are present in every key file sampled. Together with the pid
+in the file name, `procStart` and `pidDomain` distinguish the publishing
+process from a later one that reuses its pid, and from an identical pid in
+another namespace. What the reference implementation does with them is not
+observable from outside — only that it writes them.
 
 [[when_authentication_is_required]]
 === When authentication is required
@@ -96,12 +125,15 @@ The monitored sessions exchanged `auth` and `user` frames.
 === `auth`
 
 Whether a receiver requires authentication is described in
-<<_when_authentication_is_required,When authentication is required>>. When
+<<when_authentication_is_required,When authentication is required>>. When
 used, the first line is an authentication frame:
 
 [source,json]
 ----
-{"type":"auth","token":"<32 hex chars>"}
+{
+  "type":"auth",
+  "token":"<32 hex chars>"
+}
 ----
 
 The token may be the inherited `CLAUDE_CODE_MESSAGING_TOKEN` or the
@@ -172,6 +204,60 @@ The `message.content` envelope contains:
 | `from-name` | A display name carried in the envelope; observed names are plain text with the envelope delimiters absent.
 | `from-mode` | Claude Code sessions observed here send `"prompting"`.
 |===
+
+All three are optional. With no `from-name` the recipient displays the
+sender's pid instead.
+
+=== What the envelope requires
+
+A recipient either accepts the element — and the message is shown as an
+attributed one, the markup gone — or it does not, and the whole element
+arrives as literal text in the message body. Nothing reports which happened to
+the sender.
+
+The difference was measured against Claude Code 2.1.272 on 2026-09-17 by
+sending variants to a live session and reading which form each arrived in.
+Three things are required:
+
+[cols="3,4"]
+|===
+| Requirement | Observed on violation
+
+| A newline directly after the open tag, and directly before the closing tag
+| Refused. An element whose body sits inline on the open-tag line arrives as
+  literal text, with everything else about it well-formed.
+
+| No `<` or `>` inside an attribute value
+| Refused.
+
+| No literal newline inside an attribute value
+| Refused.
+|===
+
+A double quote inside an attribute value is a third case, neither accepted
+nor refused: it closes the value early, so the element still parses and the
+attribute is silently truncated at that point. A name of `pr"obe` arrives
+as `pr`.
+
+Everything else that looks structural is not. Each of the following was
+accepted:
+
+* attributes in a different order
+* two spaces between attributes instead of one
+* a literal `</cross-session-message>` inside the body, which is passed
+  through intact — the match is greedy and ends at the last closing tag
+* a name of 5000 characters, whole; no length limit was found
+* an invisible character (U+200B) in a name
+* an attribute the recipient does not recognise, which is accepted and
+  dropped from what it displays
+* omitting any of `from`, `from-name` or `from-mode`
+
+A client therefore has one hard rule for composing the element — emit the two
+newlines, and remove `<`, `>` and control characters from every attribute
+value — and need not escape, shorten or reorder anything else. Escaping in
+particular is not merely unnecessary: no session frame was ever observed to
+contain an escape, so an escaped value is a rendering nothing is known to
+accept.
 
 [#_provenance_and_caveats]
 == Provenance and caveats

@@ -25,17 +25,12 @@ var ErrLineTooLong = errors.New("line exceeds the 1 MiB cap")
 // means the frame is accepted and discarded. Each callback gets the verified
 // peer identity and the frame, whose Raw field holds the line as received.
 type Handler struct {
-	OnUser                   func(ctx context.Context, p *Peer, f *Frame)
-	OnRename                 func(ctx context.Context, p *Peer, f *Frame)
-	OnPeerMessageStatus      func(ctx context.Context, p *Peer, f *Frame)
-	OnNotifyWhenIdle         func(ctx context.Context, p *Peer, f *Frame)
-	OnPeerIdleNotice         func(ctx context.Context, p *Peer, f *Frame)
-	OnYieldArtifactReplies   func(ctx context.Context, p *Peer, f *Frame)
-	OnUnyieldArtifactReplies func(ctx context.Context, p *Peer, f *Frame)
-	OnArtifactRepliesYielded func(ctx context.Context, p *Peer, f *Frame)
+	OnUser func(ctx context.Context, p *Peer, f *Frame)
 
-	// OnUnknown receives frames with an unhandled type or control action,
-	// which the reference implementation only logs.
+	// OnUnknown receives a frame this package does not decode: a control
+	// frame, or a type it does not know. The reference implementation sends
+	// several control actions this package deliberately does not model, so
+	// they arrive here with Raw intact rather than being dropped.
 	OnUnknown func(ctx context.Context, p *Peer, f *Frame)
 	// OnDrop reports a frame or connection the server refused, with the
 	// reason: a session_id mismatch, a failed auth, an unparsable line.
@@ -68,9 +63,8 @@ type Config struct {
 	AllowUnidentifiedPeers bool
 	// PublishKey writes the key file so peers can discover PeerToken.
 	PublishKey bool
-	// ModeSource says where this inbox's permission posture comes from: not
-	// set, so no mode is asserted; derived and required; or derived where
-	// that is possible. See ModeSource for the three.
+	// ModeSource says where this inbox's permission posture comes from:
+	// nowhere, so none is asserted, or derived from the spawning session.
 	//
 	// It names a SOURCE and can never name a posture. The posture is a value
 	// a receiver acts on and cannot verify, and a struct field is the thing
@@ -78,28 +72,6 @@ type Config struct {
 	// derived, and the only way to claim one is the function that says so in
 	// its name (Server.AssertModeUnverified).
 	ModeSource ModeSource
-	// AutoStatus answers every accepted user frame that carries a reply
-	// address with a "delivered" peer_message_status. A peer waiting on
-	// delivery otherwise learns nothing until its timeout.
-	//
-	// Do NOT turn this on for an inbox that Claude Code sessions send to. A
-	// session emits "delivered" only after a message was HELD and then
-	// approved, so its sender renders any delivered as "approved and released
-	// after approval". An inbox that acks every accept therefore reports a
-	// hold and an approval that never happened, in the sender's terminal,
-	// once per message — and no setting on either side will make it stop,
-	// because nothing was ever held.
-	//
-	// That cost four sessions an hour of measuring a gate that did not exist.
-	// It is off by default and should stay off wherever the senders are
-	// sessions; for peers of our own, prefer an explicit Server.Ack on a
-	// path where "delivered" means something.
-	AutoStatus bool
-	// TrackIdle records notify_when_idle subscriptions taken out against us,
-	// for Server.GoIdle to notify. Without it the request is dispatched to
-	// the handler and forgotten, and the subscriber waits for a notice that
-	// never comes.
-	TrackIdle bool
 	// FirstLineTimeout overrides the deadline for a connection's first
 	// complete line. Zero uses FirstLineTimeout.
 	FirstLineTimeout time.Duration
@@ -108,27 +80,22 @@ type Config struct {
 }
 
 // ModeSource says where an inbox's asserted permission posture comes from.
-// There is no value meaning "whatever the caller says": a posture is either
-// established or absent.
+// There is no value meaning "whatever the caller says", and no way elsewhere
+// to supply one: a posture is either established or absent.
 type ModeSource int
 
 const (
-	// ModeSourceNone asserts no posture. A frame with no from_mode is held
-	// only by a receiver in bypass, so this costs a hold at worst.
+	// ModeSourceNone asserts no posture, which a receiver may answer with a
+	// hold — the cost of saying nothing, and cheaper than saying something
+	// unverified.
 	ModeSourceNone ModeSource = iota
 	// ModeSourceDerived reads the posture from the spawning session and
-	// asserts nothing if it cannot, binding either way. This is what a
-	// cross-platform caller wants: detection works on Linux and errors on
-	// darwin and windows, and the platforms where it works are exactly the
-	// ones where it helps. Failing to detect costs a hold; failing to bind
-	// would cost the whole return path.
+	// asserts nothing if it cannot, binding either way. Detection needs
+	// /proc, so it works on Linux and errors on darwin and windows — and
+	// binding anyway is the point: failing to detect costs a hold, while
+	// refusing to bind would cost the whole return path on three of the five
+	// platforms this ships on.
 	ModeSourceDerived
-	// ModeSourceDerivedRequired refuses to bind unless the posture can be
-	// established. For a caller whose feature is meaningless without parity,
-	// not starting beats starting silently without it — but on any platform
-	// with no /proc that is every time, so it is opt-in for exactly that
-	// caller rather than the default.
-	ModeSourceDerivedRequired
 )
 
 // Server is a bound inbox.
@@ -144,12 +111,7 @@ type Server struct {
 
 	mu     sync.Mutex
 	closed bool
-	// heldMsgIDs records the messages this inbox told a sender were HELD.
-	// "delivered" means "the hold you were told about has been released" and
-	// nothing else, so it is only ours to send for one of these.
-	heldMsgIDs map[string]bool
-	wg         sync.WaitGroup
-	idle       idleSubs
+	wg     sync.WaitGroup
 }
 
 // Listen binds an inbox and, if configured, publishes its key file.
@@ -191,18 +153,13 @@ func Listen(cfg Config) (*Server, error) {
 
 	if cfg.ModeSource != ModeSourceNone {
 		m, err := DetectParentMode()
-		switch {
-		case err == nil:
-			s.mode = m
-		case cfg.ModeSource == ModeSourceDerivedRequired:
-			ln.Close()
-			os.Remove(path)
-			return nil, fmt.Errorf("ModeSourceDerivedRequired: %w", err)
-		default:
+		if err != nil {
 			// Bind anyway, asserting nothing. Worth saying out loud: the
 			// symptom otherwise is someone else's message being held, seen
 			// from the wrong side of the socket.
-			s.logf("asserting no permission mode (%v); frames we originate may be held by a bypass-mode receiver", err)
+			s.logf("asserting no permission mode (%v); frames we originate may be held for approval", err)
+		} else {
+			s.mode = m
 		}
 	}
 
@@ -427,11 +384,12 @@ func (s *Server) dispatch(ctx context.Context, peer *Peer, line []byte, isFirst 
 	}
 
 	if isFirst && f.IsAuth() {
+		// Either accepted token authenticates, and the comparison is
+		// constant-time so a wrong token leaks nothing by how long it took.
 		switch {
-		case subtle.ConstantTimeCompare([]byte(f.Token), []byte(s.cfg.PeerToken)) == 1:
-			peer.Auth = AuthPeer
-		case subtle.ConstantTimeCompare([]byte(f.Token), []byte(s.cfg.ChildToken)) == 1:
-			peer.Auth = AuthChild
+		case subtle.ConstantTimeCompare([]byte(f.Token), []byte(s.cfg.PeerToken)) == 1,
+			subtle.ConstantTimeCompare([]byte(f.Token), []byte(s.cfg.ChildToken)) == 1:
+			peer.Authed = true
 		default:
 			if s.cfg.RequireAuth {
 				s.drop(ctx, peer, line, errors.New("invalid token; closing the connection"))
@@ -456,46 +414,6 @@ func (s *Server) dispatch(ctx context.Context, peer *Peer, line []byte, isFirst 
 	switch f.Type {
 	case TypeUser:
 		call(ctx, h.OnUser, h.OnUnknown, peer, f)
-		if s.cfg.AutoStatus && s.wasHeld(f.MsgID) {
-			// Reporting happens off the read loop: it dials the sender back,
-			// and that must not stall the connection we are reading.
-			s.wg.Add(1)
-			go func() {
-				defer s.wg.Done()
-				if err := s.Ack(ctx, f); err != nil {
-					s.report(fmt.Errorf("acknowledge %s: %w", f.MsgID, err))
-				}
-			}()
-		}
-	case TypeControl:
-		switch f.Action {
-		case ActionRename:
-			if f.Name == "" {
-				s.drop(ctx, peer, line, errors.New("rename without a name"))
-				return connContinue
-			}
-			call(ctx, h.OnRename, h.OnUnknown, peer, f)
-		case ActionPeerMessageStatus:
-			call(ctx, h.OnPeerMessageStatus, h.OnUnknown, peer, f)
-		case ActionNotifyWhenIdle:
-			if s.cfg.TrackIdle {
-				if err := s.Subscribe(f); err != nil {
-					s.drop(ctx, peer, line, fmt.Errorf("notify_when_idle refused: %w", err))
-					return connContinue
-				}
-			}
-			call(ctx, h.OnNotifyWhenIdle, h.OnUnknown, peer, f)
-		case ActionPeerIdleNotice:
-			call(ctx, h.OnPeerIdleNotice, h.OnUnknown, peer, f)
-		case ActionYieldArtifactReplies:
-			call(ctx, h.OnYieldArtifactReplies, h.OnUnknown, peer, f)
-		case ActionUnyieldArtifactReplies:
-			call(ctx, h.OnUnyieldArtifactReplies, h.OnUnknown, peer, f)
-		case ActionArtifactRepliesYielded:
-			call(ctx, h.OnArtifactRepliesYielded, h.OnUnknown, peer, f)
-		default:
-			call(ctx, nil, h.OnUnknown, peer, f)
-		}
 	default:
 		call(ctx, nil, h.OnUnknown, peer, f)
 	}
@@ -540,27 +458,4 @@ func (s *Server) logf(format string, args ...any) {
 	if s.cfg.Logger != nil {
 		s.cfg.Logger.Printf("udsmsg: "+format, args...)
 	}
-}
-
-// Mode is the permission posture this inbox asserts on the frames it
-// originates. Empty means it asserts none.
-func (s *Server) Mode() Mode { return s.mode }
-
-// AssertModeUnverified makes this inbox claim m without establishing it.
-//
-// Nothing checks the claim: a receiver holds a frame whose mode mismatches
-// its own and lets a matching one through, so a claim chosen to match is a
-// claim that clears the gate. Where the posture is a user's decision, that
-// makes asserting it upward a way of spending permission the user did not
-// give. Prefer Config.ModeSource, which reads the posture instead, and reach
-// for this only where the caller genuinely knows something the parent's
-// command line cannot show.
-//
-// The honest path and this one differ only by which function was called, and
-// that difference is invisible afterwards — so it is logged. An inbox whose
-// posture was claimed rather than established should say so somewhere other
-// than in the caller's memory.
-func (s *Server) AssertModeUnverified(m Mode) {
-	s.mode = m
-	s.logf("permission mode %q asserted by the caller, not derived from the spawning session", m)
 }

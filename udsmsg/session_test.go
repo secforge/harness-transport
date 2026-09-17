@@ -4,9 +4,8 @@ import "testing"
 
 // An MCP server's entry has to be identifiable as what it is: the harness it
 // belongs to, the server it is, and a kind that does not claim to be a
-// session. Registering makes it addressable by name — it does not stop a
-// reply being held for approval, which was measured and is not an addressing
-// property — and registering AS a session would be the impersonation that
+// session. Registering makes it addressable by name and says nothing more
+// than that; registering AS a session would be the impersonation that
 // justified not registering at all.
 func TestMCPEntryNamesBothHarnessAndServer(t *testing.T) {
 	e, err := NewMCPEntry("/run/user/0/cc-socks/4242-a1b2c3d4.sock", "example-mcp-server (build)", "example-mcp-server2")

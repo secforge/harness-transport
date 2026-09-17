@@ -39,8 +39,8 @@ func newClaude(socket, token, name, replyTo string, mode udsmsg.Mode) Deliverer 
 }
 
 // defaultSenderName identifies this process in the delivered message. It is
-// attribution, not authority: the receiver takes identity from the socket
-// credentials and ignores what a sender claims.
+// attribution, not authority: a name is composed by its sender, so nothing
+// should be granted on the strength of one.
 func defaultSenderName() string {
 	if exe, err := os.Executable(); err == nil {
 		return filepath.Base(exe)
@@ -166,10 +166,9 @@ func (c *claudeBackend) Deliver(ctx context.Context, d Delivery) (Receipt, error
 	msgID, err := client.SendUser(udsmsg.User{
 		Text: text,
 		From: c.replyTo,
-		// The mode goes on the FRAME, where the receiver's accept-or-hold
-		// decision reads it, and in the envelope, where it is displayed.
-		// Asserting one in only one place would be incoherent, and the
-		// frame is the one that decides.
+		// Set in both places a posture appears, so the two cannot
+		// disagree. Which of them a recipient reads is not observable
+		// from here.
 		FromMode: c.mode,
 		Attribution: &udsmsg.CrossSession{
 			From: c.replyTo,

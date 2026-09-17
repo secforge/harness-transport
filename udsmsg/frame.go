@@ -14,8 +14,8 @@ import (
 	"regexp"
 )
 
-// MaxLineBytes is the per-line cap the receiver enforces. A longer line drops
-// the whole connection, not just that line.
+// MaxLineBytes is the documented per-line cap: a longer line closes the
+// connection, rather than dropping that line alone.
 const MaxLineBytes = 1 << 20
 
 // Frame types.
@@ -53,10 +53,6 @@ type Frame struct {
 
 	// type=user
 	Message *UserMessage `json:"message,omitempty"`
-	// UUID becomes the injected prompt's uuid. Unlike MsgID it is not
-	// validated and is no use as a correlation handle; omitted, the receiver
-	// generates one.
-	UUID string `json:"uuid,omitempty"`
 
 	// Raw is the undecoded line. Set on receive, ignored on send.
 	Raw json.RawMessage `json:"-"`
@@ -66,8 +62,8 @@ type Frame struct {
 // loose about shape and strict about the token: extra fields are tolerated.
 func (f *Frame) IsAuth() bool { return f.Type == TypeAuth }
 
-// Text returns the prompt text of a user frame. Missing or empty content
-// yields "", which the receiver ignores.
+// Text returns the prompt text of a user frame, or "" when the frame carries
+// no message.
 func (f *Frame) Text() string {
 	if f.Message == nil {
 		return ""
@@ -86,7 +82,7 @@ func DecodeFrame(line []byte) (*Frame, error) {
 }
 
 // EncodeFrame marshals a frame as a newline-terminated line, rejecting one
-// that would exceed the receiver's cap.
+// over the documented line cap — a longer line closes the connection.
 func EncodeFrame(f *Frame) ([]byte, error) {
 	b, err := json.Marshal(f)
 	if err != nil {
@@ -98,12 +94,9 @@ func EncodeFrame(f *Frame) ([]byte, error) {
 	return append(b, '\n'), nil
 }
 
-// MsgIDPattern is the receiver's validator for a message id. A frame whose
-// msg_id fails it cannot be correlated, so status and idle notices for it go
-// unmatched — silently, since nothing rejects the message itself.
-//
-// The 32-hex form that appears elsewhere in this protocol is the Windows
-// named-pipe name, not a message id.
+// MsgIDPattern is the RFC-4122 shape sessions were observed to send as a
+// msg_id. The 32-hex form that appears elsewhere in this protocol is a Windows
+// pipe name, not a message id.
 var MsgIDPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 // NewMsgID returns a sender-assigned message id, the UUID shape Claude Code

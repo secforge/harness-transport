@@ -7,11 +7,10 @@ import (
 	"unicode"
 )
 
-// A session does not assert its identity in protocol fields — the receiver
-// discards those. It writes the attribution into the prompt itself, as an
-// element the receiving harness parses out of message.content and renders as
-// an attributed peer message. Sending bare text instead injects an anonymous
-// prompt: the peer sees no sender name and no reply address it trusts.
+// A session writes its attribution into the prompt itself, as an element
+// inside message.content, and a recipient shows an accepted one as an
+// attributed message with the markup gone. Sending bare text instead delivers
+// an anonymous prompt — no sender name, no address to answer.
 //
 // What the receiver requires of the element was measured against Claude Code
 // 2.1.272 on 2026-09-17, by sending variants to a live session and reading
@@ -70,9 +69,9 @@ type CrossSession struct {
 }
 
 // Wrap renders text as an attributed cross-session message. An attribute that
-// is empty, or that fails its guard, is omitted rather than corrected: an
-// attribute the receiver would reject costs the whole wrapper, while a missing
-// one costs only that field.
+// is empty, or that fails its guard, is omitted rather than corrected — a
+// missing attribute costs only itself, while a corrected one would assert
+// something the caller did not say.
 func (cs CrossSession) Wrap(text string) string {
 	var b strings.Builder
 	b.WriteString("<")
@@ -125,15 +124,11 @@ func ScrubName(name string) string {
 	return strings.TrimSpace(name)
 }
 
-// The two expressions below deliberately mirror the receiver's own, which are
-// regexps too. This element is not XML: it is a fixed byte template that
-// resembles it, and the receiver accepts exactly one rendering of it. An XML
-// parser would be the wrong tool — it accepts single quotes, entity
-// references, comments, reordered attributes and extra whitespace, none of
-// which the peer accepts, so we would report an attribution the peer never
-// rendered. Neither expression is load-bearing for correctness: they only
-// propose a candidate, and the round-trip comparison in Unwrap is what
-// validates it.
+// This element resembles XML and is not XML, so the two expressions below
+// match a byte template rather than parse a document. An XML parser would
+// accept single quotes, entity references, comments and CDATA, none of which
+// has ever been seen in a session's frame — reading them would invent an
+// attribution nobody wrote.
 
 // wrapperRe matches a whole content string that is one attributed message.
 var wrapperRe = regexp.MustCompile(`(?s)\A<` + csElement + `\b([^>]*)>\n(.*)\n</` + csElement + `>\z`)

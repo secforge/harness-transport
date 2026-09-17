@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// FirstLineTimeout is the receiver's deadline for a complete first line. A
+// FirstLineTimeout is the documented deadline for a complete first line. A
 // connection that dribbles bytes without completing a line inside this window
 // is closed, so a client should build its payload before connecting.
 const FirstLineTimeout = 30 * time.Second
@@ -89,34 +89,29 @@ func (c *Client) Close() error { return c.conn.Close() }
 
 // User describes a prompt to inject into a session's queue.
 type User struct {
-	// Text is the prompt. Empty text is ignored by the receiver.
+	// Text is the prompt.
 	Text string
-	// From is our reply address, "uds:<socket path>". Without it the receiver
-	// has nowhere to send delivery status.
+	// From is our reply address, "uds:<socket path>". Without it a recipient
+	// has nowhere to answer.
 	From string
 	// FromMode is our permission posture, used for permission-mode parity.
 	FromMode Mode
-	// MsgID correlates status replies. Generated if empty. It must be a
-	// UUID: the receiver drops a non-UUID from its origin record, so every
-	// later status arrives with no orig_msg_id to match, and a
-	// notify_when_idle carrying one is discarded outright.
+	// MsgID identifies the message. Generated if empty, and required to be a
+	// UUID because that is the shape sessions were observed to send.
 	MsgID string
-	// UUID is the injected prompt's uuid. Optional and unvalidated; the
-	// receiver generates one when it is absent.
-	UUID string
 	// Attribution, when set, wraps Text so the peer sees a named message with
 	// a reply address instead of an anonymous prompt.
 	Attribution *CrossSession
-	// Priority places the prompt in the receiver's queue. Defaults to
-	// PriorityNext, what a session sends.
+	// Priority is sent as given, defaulting to PriorityNext — the value
+	// sessions were observed to send.
 	Priority string
 }
 
 // SendUser injects a prompt and returns the message id it was sent under.
 //
-// This is fire-and-forget: the receiver queues the prompt and answers in its
-// own transcript, not on this connection. Delivery status and any reply
-// arrive at the From address, which requires an inbox of your own.
+// This is fire-and-forget: nothing comes back on this connection. Anything a
+// recipient chooses to send arrives at the From address, which means having an
+// inbox of your own.
 func (c *Client) SendUser(u User) (msgID string, err error) {
 	f, err := BuildUserFrame(&u)
 	if err != nil {
@@ -141,7 +136,7 @@ func BuildUserFrame(u *User) (*Frame, error) {
 		u.MsgID = NewMsgID()
 	}
 	if !MsgIDPattern.MatchString(u.MsgID) {
-		return nil, fmt.Errorf("msg_id %q is not a UUID; the receiver would not correlate it", u.MsgID)
+		return nil, fmt.Errorf("msg_id %q is not the UUID shape this protocol uses", u.MsgID)
 	}
 	if u.From != "" && !ValidAddress(u.From) {
 		return nil, fmt.Errorf("reply address %q is not well-shaped", u.From)
@@ -161,12 +156,11 @@ func BuildUserFrame(u *User) (*Frame, error) {
 		FromMode: u.FromMode,
 		Priority: u.Priority,
 		Message:  &UserMessage{Role: "user", Content: content},
-		UUID:     u.UUID,
 	}, nil
 }
 
 // EncodedUserSize reports how many bytes the frame for u would occupy on the
-// wire, newline included, and whether that is within the receiver's line cap.
+// wire, newline included, and whether that is within the line cap.
 //
 // A line over the cap costs the whole connection rather than just the
 // message, so a caller holding a large body should ask this rather than

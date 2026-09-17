@@ -28,9 +28,9 @@ type Handler struct {
 	OnUser func(ctx context.Context, p *Peer, f *Frame)
 
 	// OnUnknown receives a frame this package does not decode: a control
-	// frame, or a type it does not know. The reference implementation sends
-	// several control actions this package deliberately does not model, so
-	// they arrive here with Raw intact rather than being dropped.
+	// frame, or a type it does not know. Sessions send frames this package
+	// deliberately does not model, so they arrive here with Raw intact rather
+	// than being dropped.
 	OnUnknown func(ctx context.Context, p *Peer, f *Frame)
 	// OnDrop reports a frame or connection the server refused, with the
 	// reason: a session_id mismatch, a failed auth, an unparsable line.
@@ -46,8 +46,7 @@ type Config struct {
 	// mistaken for a real session's inbox.
 	Path string
 	// RequireAuth rejects every line from a connection that has not
-	// presented a valid token. The reference implementation leaves this off
-	// by default, accepting unauthenticated frames.
+	// presented a valid token.
 	RequireAuth bool
 	// AllowUnidentifiedPeers accepts connections whose credentials the
 	// kernel will not report — which is every connection on a platform
@@ -176,20 +175,12 @@ func Listen(cfg Config) (*Server, error) {
 }
 
 // allocSocketPath picks the first usable standard directory and a socket name
-// that carries our pid plus a discriminator.
-// allocSocketPath places our inbox in a standard socket directory, and that
-// location is load-bearing rather than tidy.
+// carrying our pid plus a discriminator.
 //
-// A receiver validates a claimed reply address before it will send anything
-// there. An address in the SAME DIRECTORY as the receiver's own socket is
-// accepted on the strength of ending in .sock and nothing else; an address
-// anywhere else has to clear a verified peer pid, a file-name pattern, one of
-// the standard directories, and a uid written into the path matching one the
-// receiver accepts. Rejection is silent — it logs on its side and simply does
-// not send the status frame.
-//
-// So moving this to a temp dir would not fail loudly, it would cost every
-// status frame with no error anywhere.
+// The directory is one of the standard ones because that is where this
+// transport's sockets live and where CheckDir's guarantee holds. The name
+// carries our pid so a peer can attribute the inbox to a process, and the
+// discriminator keeps it from being mistaken for a real session's.
 func allocSocketPath() (string, error) {
 	var disc [4]byte
 	if _, err := rand.Read(disc[:]); err != nil {
@@ -421,8 +412,8 @@ func call(ctx context.Context, fn, fallback func(context.Context, *Peer, *Frame)
 
 // readLine reads one newline-terminated line, capped at max bytes.
 //
-// It returns complete == false for a trailing partial line, which the
-// reference implementation still parses when the connection closes.
+// It returns complete == false for a trailing partial line, so the caller can
+// decide what to do with a final object that arrived without its newline.
 func readLine(r *bufio.Reader, max int) (line []byte, complete bool, err error) {
 	var buf []byte
 	for {

@@ -70,8 +70,9 @@ func PIDFromSocketName(name string) (pid int, ok bool) {
 }
 
 // CheckDir verifies a socket directory is safe to use: mode 0700 and owned by
-// the caller or root. A socket in a directory failing this check is refused by
-// the receiver (ownerRefused), so binding there is pointless.
+// the caller or root. That is the whole boundary this transport rests on — the
+// token in a key file protects nothing a same-uid process cannot already read,
+// so a directory anyone else can enter makes the socket inside it public.
 func CheckDir(dir string) error {
 	fi, err := os.Stat(dir)
 	if err != nil {

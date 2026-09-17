@@ -72,8 +72,8 @@ func Alive(pid int, procStart string) bool {
 // DetectParentMode reports the permission posture of the session that spawned
 // this process.
 //
-// from_mode is a CLAIM the receiver acts on and cannot check, so it must never
-// be invented. What this establishes is therefore narrow: that a spawning
+// from_mode is a claim, and nothing here can verify one, so it must never be
+// invented. What this establishes is therefore narrow: that a spawning
 // session exists and is running — its pid comes from the socket it exported,
 // and its process must be readable. Given that, it reports the one posture
 // ever observed on this wire. It reports nothing else, because nothing else

@@ -220,8 +220,8 @@ func WithReplyAddress(addr string) Option {
 // WithDetectedMode establishes this process's permission posture by reading
 // it from the session that spawned us, and asserts that.
 //
-// This is the call to reach for. The posture is a CLAIM the receiver acts on
-// and cannot check, so the one safe way to produce it is to derive it: see
+// This is the call to reach for. The posture is a claim nothing can verify,
+// so the one safe way to produce it is to derive it: see
 // udsmsg.DetectParentMode for what it establishes, which is narrow.
 //
 // When the posture cannot be established this asserts NOTHING rather than

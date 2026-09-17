@@ -10,7 +10,9 @@ import (
 	"path/filepath"
 )
 
-// maxKeyFileBytes is the largest key file the receiver accepts.
+// maxKeyFileBytes bounds what ReadKey will take from a file whose size it does
+// not control. A key file holds three short strings; anything larger is not
+// one, and reading it would be the only unbounded read in this package.
 const maxKeyFileBytes = 4096
 
 // Key is the content of a session's published key file. procStart and

@@ -147,9 +147,6 @@ func TestRoundTripUserFrame(t *testing.T) {
 	if !p.Authenticated() {
 		t.Error("a valid peer token should authenticate the connection")
 	}
-	if !p.SelfSent {
-		t.Error("a message from our own pid should be marked selfSent")
-	}
 }
 
 func TestAuthOptionalAcceptsUnauthenticated(t *testing.T) {

@@ -21,9 +21,6 @@ type Peer struct {
 	// the accepted tokens it was is not recorded: both authenticate, and
 	// nothing observed distinguishes what follows.
 	Authed bool
-	// SelfSent marks a message that appears to originate from the receiver
-	// itself.
-	SelfSent bool
 	// Addr is the local socket the peer connected to.
 	Addr string
 	// Identified reports that the kernel actually answered. A Peer with

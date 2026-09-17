@@ -320,7 +320,6 @@ func (s *Server) handleConn(ctx context.Context, conn *net.UnixConn) {
 		s.report(fmt.Errorf("accepting an unidentified peer: %w", err))
 	}
 	peer.Addr = s.path
-	peer.SelfSent = int(peer.PID) == os.Getpid()
 
 	// The first complete line must arrive inside the deadline.
 	deadline := s.cfg.FirstLineTimeout

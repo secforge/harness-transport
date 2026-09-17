@@ -95,9 +95,8 @@ func TestFindSocketOfAbsentPID(t *testing.T) {
 // us, not the one published for strangers. The two do not interchange — the
 // child token authenticates to the parent's inbox and nowhere else — and it
 // needs no configuration, which the key file does.
-//
-// Presenting it is not a way around anything the receiver decides for itself:
-// what it does with an authenticated connection is not observable from here.
+// What a receiver then does with the connection is not observable from
+// here.
 func TestOwnParentIsReachedWithTheChildToken(t *testing.T) {
 	// Bound at the canonical <pid>.sock, since that is the name
 	// ResolveTarget looks for — an allocated inbox carries a discriminator

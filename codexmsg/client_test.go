@@ -118,72 +118,6 @@ func dialFake(t *testing.T, d *fakeDaemon) *Client {
 	return c
 }
 
-func TestInitializeAndListThreads(t *testing.T) {
-	d := startFakeDaemon(t, func(method string, params json.RawMessage) (any, *Error) {
-		switch method {
-		case MethodInitialize:
-			var p InitializeParams
-			json.Unmarshal(params, &p)
-			if p.ClientInfo.Name == "" {
-				return nil, &Error{Code: CodeInvalidRequest, Message: "no client name"}
-			}
-			return map[string]any{"userAgent": "fake/1"}, nil
-		case MethodThreadList:
-			return ThreadListResult{Threads: []Thread{
-				{ID: "0199a1f4-0000-7000-8000-000000000001", Name: "alpha", Cwd: "/tmp"},
-				{ID: "0199a1f4-0000-7000-8000-000000000002", Name: "beta"},
-			}}, nil
-		}
-		return nil, &Error{Code: CodeMethodNotFound, Message: "unknown method " + method}
-	})
-
-	c := dialFake(t, d)
-	ctx := context.Background()
-	if _, err := c.Initialize(ctx, InitializeParams{
-		ClientInfo: ClientInfo{Name: "codexmsg-test", Version: "0.1.0"},
-	}); err != nil {
-		t.Fatalf("initialize: %v", err)
-	}
-	page, err := c.ListThreads(ctx, ThreadListParams{})
-	if err != nil {
-		t.Fatalf("thread/list: %v", err)
-	}
-	if len(page.Threads) != 2 || page.Threads[0].Name != "alpha" {
-		t.Fatalf("threads = %+v", page.Threads)
-	}
-	if len(page.Threads[0].Raw) == 0 {
-		t.Error("the undecoded record should be kept, since the server sends fields we do not model")
-	}
-}
-
-// A name has to be resolved through thread/list; a UUID is used as given, so
-// naming a thread by id must not cost a round trip.
-func TestFindThreadByNameAndByID(t *testing.T) {
-	listed := 0
-	d := startFakeDaemon(t, func(method string, _ json.RawMessage) (any, *Error) {
-		if method == MethodThreadList {
-			listed++
-			return ThreadListResult{Threads: []Thread{{ID: "id-1", Name: "beta"}}}, nil
-		}
-		return map[string]any{}, nil
-	})
-	c := dialFake(t, d)
-	ctx := context.Background()
-
-	got, err := c.FindThread(ctx, "beta")
-	if err != nil || got.ID != "id-1" {
-		t.Fatalf("FindThread(name) = %+v, %v", got, err)
-	}
-	uuid := NewUUIDv7()
-	got, err = c.FindThread(ctx, uuid)
-	if err != nil || got.ID != uuid {
-		t.Fatalf("FindThread(uuid) = %+v, %v", got, err)
-	}
-	if listed != 1 {
-		t.Errorf("thread/list called %d times; a UUID target should not need a listing", listed)
-	}
-}
-
 func TestQueueMessageSendsTheCLIsShape(t *testing.T) {
 	var got ThreadQueueAddParams
 	d := startFakeDaemon(t, func(method string, params json.RawMessage) (any, *Error) {
@@ -249,28 +183,6 @@ func TestServerErrorsSurfaceWithTheirCode(t *testing.T) {
 	}
 }
 
-func TestNotificationsAreDelivered(t *testing.T) {
-	d := startFakeDaemon(t, func(string, json.RawMessage) (any, *Error) {
-		return map[string]any{}, nil
-	})
-	d.notify = "thread/event"
-	c := dialFake(t, d)
-	// Any request forces the connection to be established and read.
-	c.Call(context.Background(), MethodInitialize, InitializeParams{ClientInfo: ClientInfo{Name: "x", Version: "1"}}, nil)
-
-	select {
-	case m := <-c.Notifications():
-		if m.Method != "thread/event" {
-			t.Errorf("notification method = %q", m.Method)
-		}
-		if !m.IsNotification() || m.IsResponse() {
-			t.Error("a frame with a method and no id is a notification")
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("no notification arrived")
-	}
-}
-
 // A call in flight when the daemon goes away must fail, not hang.
 func TestCallFailsWhenTheDaemonDisappears(t *testing.T) {
 	d := startFakeDaemon(t, func(string, json.RawMessage) (any, *Error) {
@@ -282,7 +194,7 @@ func TestCallFailsWhenTheDaemonDisappears(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := c.Call(ctx, MethodThreadList, ThreadListParams{}, nil); err == nil {
+	if err := c.Call(ctx, MethodInitialize, InitializeParams{}, nil); err == nil {
 		t.Error("a call on a dead connection should fail")
 	}
 }

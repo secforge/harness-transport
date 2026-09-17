@@ -12,11 +12,9 @@ import (
 
 // codexBackend delivers into the Codex harness thread that launched us.
 //
-// Codex does not put a thread id in an MCP server's environment — it injects
-// CODEX_THREAD_ID into shell-tool children only — so the target cannot be read
-// at startup. It arrives instead on every MCP request as _meta.threadId, which
-// is the harness naming itself over the pipe it spawned us on. Adopt latches
-// that, once.
+// Codex hands an MCP server no thread, so there is nothing to read at startup.
+// The target arrives on every MCP request as _meta.threadId — the harness
+// naming itself over the pipe it spawned us on. Adopt latches that, once.
 type codexBackend struct {
 	mu sync.Mutex
 	// thread is the latched target. Empty until the first request carrying
@@ -38,22 +36,15 @@ func newCodex(name string) *codexBackend {
 	return &codexBackend{name: name}
 }
 
-// codexMaxChars is the daemon's hard limit, which it enforces with a
-// structured error rather than by truncating. It counts CHARACTERS, not
-// bytes — "Input exceeds the maximum length of 1048576 characters" — so a
-// byte count compared against it is a different quantity that happens to be
-// conservative for UTF-8 rather than a correct comparison.
+// codexMaxChars is the daemon's hard limit, enforced with an error rather
+// than by truncating. It counts CHARACTERS, not bytes, so comparing a byte
+// count against it is conservative rather than correct.
 const codexMaxChars = 1 << 20
 
-// No conversion is needed between the daemon's character limit and the byte
-// figure MaxIntactBytes hands out, and the intuition that there is one is
-// backwards. In UTF-8 every character costs at least one byte, so for any
-// string characters <= bytes: a body within a byte budget of N can never
-// exceed N characters. The multiplication by four applies in the opposite
-// direction — bounding bytes from a character budget — which is not the
-// direction this method runs. It holds under UTF-16 counting too, where a
-// four-byte character is two units and ASCII is the worst case at one unit
-// per byte.
+// No conversion is needed between that limit and the byte figure
+// MaxIntactBytes returns, and the intuition that there is one runs backwards:
+// characters <= bytes, so a body inside a byte budget of N cannot exceed N
+// characters. Multiplying by four bounds the other direction.
 
 // codexOverhead is reserved for the cursor trailer.
 const codexOverhead = 4 << 10
@@ -65,13 +56,9 @@ func (c *codexBackend) MaxIntactBytes() (int, error) {
 	return codexMaxChars - codexOverhead, nil
 }
 
-// Fits reports whether the daemon will take this delivery, counting what the
-// daemon counts: characters. Escaping does not enter into it, and neither
-// does byte length — an accented or CJK body is refused far too early by a
-// byte comparison, which is safe and wrong.
-//
-// The returned size is in bytes, since that is what a caller measuring a
-// payload has; the decision is made on runes.
+// Fits counts what the daemon counts: characters. A byte comparison refuses
+// an accented or CJK body far too early — safe and wrong. The size returned
+// is in bytes, since that is what a caller has; the decision is on runes.
 func (c *codexBackend) Fits(d Delivery) (bool, int, error) {
 	text := compose(d)
 	return utf8.RuneCountInString(text) <= codexMaxChars, len(text), nil
@@ -193,7 +180,7 @@ func (c *codexBackend) Deliver(ctx context.Context, d Delivery) (Receipt, error)
 
 	text := compose(d)
 	if ok, _, _ := c.Fits(d); !ok {
-		return Receipt{SentBytes: len(text)}, fmt.Errorf(
+		return Receipt{}, fmt.Errorf(
 			"message is %d characters, over the %d the daemon accepts; "+
 				"deliver a shorter body and leave the rest to be fetched from the cursor",
 			utf8.RuneCountInString(text), codexMaxChars)
@@ -201,7 +188,7 @@ func (c *codexBackend) Deliver(ctx context.Context, d Delivery) (Receipt, error)
 
 	client, err := c.connect(ctx)
 	if err != nil {
-		return Receipt{SentBytes: len(text)}, fmt.Errorf("the Codex daemon did not accept a connection: %w", err)
+		return Receipt{}, fmt.Errorf("the Codex daemon did not accept a connection: %w", err)
 	}
 
 	res, err := client.QueueMessage(ctx, thread, text, "")
@@ -209,7 +196,7 @@ func (c *codexBackend) Deliver(ctx context.Context, d Delivery) (Receipt, error)
 		// A failed connection may be stale; drop it so the next delivery
 		// redials rather than inheriting a dead socket.
 		c.Close()
-		return Receipt{SentBytes: len(text)}, fmt.Errorf("the daemon did not queue the message: %w", err)
+		return Receipt{}, fmt.Errorf("the daemon did not queue the message: %w", err)
 	}
 
 	// The daemon echoes what it stored. Comparing it is the difference
@@ -220,13 +207,9 @@ func (c *codexBackend) Deliver(ctx context.Context, d Delivery) (Receipt, error)
 	}
 	verified := echo != "" && sha256.Sum256([]byte(echo)) == sha256.Sum256([]byte(text))
 
-	r := Receipt{
-		SentBytes: len(text),
-		Ref:       thread + "/" + res.QueuedSubmission.ID,
-	}
+	r := Receipt{}
 	if verified {
 		r.Observation = ObservedStored
-		r.EchoVerified = true
 		r.Detail = "Queued on the Codex harness thread, which returned a receipt echoing the message; the echo matched byte for byte, " +
 			"so the thread holds exactly what was sent. The model has not necessarily read it yet."
 		return r, nil

@@ -1,67 +1,30 @@
 // Package deliver pushes a message into the harness that launched this
 // process — and into nothing else.
 //
-// An MCP server's authority is derived entirely from the session that spawned
-// it: it runs as that session's child, inside that user's permission
-// decisions. A library that could address any reachable agent would let any
-// MCP server inject text into any other session, bypassing that session's own
-// user. For a caller relaying untrusted content — from a chat server, from
-// people who are not the operator — that would hand the content a channel it
-// must not have.
-//
-// So there is no address parameter anywhere in this package. The target is
-// derived from the process relationship:
-//
-//   - Under Claude Code, from the environment a harness session hands its
-//     children: CLAUDE_CODE_MESSAGING_SOCKET is that session's inbox and
-//     CLAUDE_CODE_MESSAGING_TOKEN is the child token — a credential written to
-//     no file, held only by processes the session spawned. The peer token, by
-//     contrast, sits in a key file any process of the same uid can read; that
-//     one is an address book, and this package never touches it.
-//   - Under Codex, from the tool call: the harness stamps "threadId" into each
-//     MCP request's _meta, so Adopt latches the target from what arrived
-//     rather than from anything a caller composed.
-//
-// The library therefore does not refuse to address other agents. It has
-// nothing with which to address them.
+// There is no address parameter anywhere here. The target comes from the
+// process relationship: under Claude Code from the socket and child token in
+// the environment, under Codex from the threadId on an inbound tool call.
+// So the package does not refuse to address other agents; it has nothing to
+// address them with.
 //
 // # The trailer
 //
-// Every delivered body ends with a bracketed trailer, and callers rely on
-// that: its absence means the message was cut in transit, so a reader may
-// treat an unterminated delivery as incomplete and decline to act on it.
+// Every delivered body ends with a bracketed trailer, in one of two forms:
 //
-// There are two forms, and a caller keying on the first alone will misread
-// the second as a missing marker:
+//	[cursor: <anchor>]                              re-fetchable
+//	[no cursor: this message cannot be re-fetched]  not re-fetchable
 //
-//	[cursor: <anchor>]                              re-fetchable from the anchor
-//	[no cursor: this message cannot be re-fetched]  no anchor — typically a
-//	                                                notice the client wrote
-//	                                                itself rather than relayed
-//
-// A pending remainder appends " · more is waiting than this message carries"
-// to either form. So the rule to key on is "ends with a bracketed trailer",
-// not "ends with a cursor line".
-//
-// Read it POSITIONALLY: the trailer is the LAST line, not any bracketed line.
-// A body can legitimately contain one that looks like it — a relay quoting a
-// delivered message, a review pasting an example, a person writing a note in
-// the same shape — and such a line will name an older cursor or none at all.
-// The marker is deliberately readable rather than unforgeable, because it is
-// read by a model: an unpredictable per-delivery nonce would defeat quoting
-// at the cost of a marker nobody can recognise. Keying on the last line
-// costs nothing and survives quoting; keying on the first bracket that
-// matches does not.
+// Either may end with " · more is waiting than this message carries". Its
+// absence means the message was cut in transit, so key on "ends with a
+// bracketed trailer", and read it POSITIONALLY — a body may quote a line that
+// looks like one.
 //
 // # Honesty about arrival
 //
-// Deliver reports what was observed, never what is hoped. The two backends
-// differ sharply and the difference is reported rather than smoothed over:
-// Codex returns an application-level receipt that echoes the stored content,
-// which can be compared byte for byte; Claude Code issues no receipt at all
-// for an ordinary accepted message, so the strongest truthful claim is that
-// the bytes were written and the socket took them. A nil error means "the call
-// did what the Observation says", not "delivered".
+// A Receipt reports what was observed. Codex echoes the stored content, so it
+// can be compared byte for byte; Claude Code acknowledges nothing, so the
+// strongest truthful claim is that the bytes were written. A nil error means
+// the call did what the Observation says, not "delivered".
 package deliver
 
 import (
@@ -74,10 +37,8 @@ import (
 	"github.com/secforge/harness-transport/udsmsg"
 )
 
-// Observation is what the backend actually observed about a delivery. The
-// values are ordered by strength, but a caller should switch on them rather
-// than compare them: ObservedTurnRan is evidence of a different kind, not a
-// stronger ObservedAccepted.
+// Observation is what the backend actually observed about a delivery,
+// ordered by strength.
 type Observation int
 
 const (
@@ -85,32 +46,21 @@ const (
 	// accepted them. Nothing confirmed arrival. This is the most a Claude
 	// Code session can honestly report for an accepted message.
 	ObservedNothing Observation = iota
-	// ObservedTurnRan means the target ran a turn after the delivery. It
-	// correlates with the message having been read and is not evidence of
-	// it — the session may have run for any reason, a user typing included.
-	// Never treat it as a read.
-	ObservedTurnRan
 	// ObservedAccepted means the server acknowledged taking the message.
 	ObservedAccepted
 	// ObservedStored means the server echoed the content back and it matched
 	// byte for byte, so the target holds exactly what was sent.
 	ObservedStored
-	// ObservedConsumed means the target produced output for this message.
-	ObservedConsumed
 )
 
 func (o Observation) String() string {
 	switch o {
 	case ObservedNothing:
 		return "nothing"
-	case ObservedTurnRan:
-		return "turn-ran"
 	case ObservedAccepted:
 		return "accepted"
 	case ObservedStored:
 		return "stored"
-	case ObservedConsumed:
-		return "consumed"
 	}
 	return fmt.Sprintf("observation(%d)", int(o))
 }
@@ -137,19 +87,6 @@ type Receipt struct {
 	// Detail is a sentence fit to show a model, stating plainly what is and
 	// is not known.
 	Detail string
-	// SentBytes is the size of the message as delivered, envelope included.
-	SentBytes int
-	// EchoVerified reports that the target echoed the content and it matched
-	// byte for byte.
-	EchoVerified bool
-	// Truncated reports that the message was cut to fit. Both backends
-	// refuse an oversize message instead of cutting it, so this is false in
-	// every path today; it exists so that a backend which ever does truncate
-	// cannot do so silently.
-	Truncated bool
-	// Ref identifies the delivery for a later re-read: a thread and
-	// submission id, or a message id.
-	Ref string
 }
 
 // Deliverer pushes into the harness that launched this process.
@@ -161,20 +98,15 @@ type Deliverer interface {
 	// Available reports whether the harness can be reached, with a sentence
 	// explaining a negative that can be shown to a model.
 	Available() (bool, string)
-	// MaxIntactBytes is the largest Body that will be delivered whole. It is
-	// a guaranteed floor, not the point at which delivery starts failing:
-	// it must hold for content the caller has not inspected, so it assumes
-	// the worst-case encoding expansion. Ordinary text goes far higher.
+	// MaxIntactBytes is a floor, not a ceiling: it assumes worst-case
+	// encoding expansion, so it holds for content nobody inspected.
 	MaxIntactBytes() (int, error)
-	// Fits reports whether this exact delivery will be sent whole, and how
-	// many bytes it occupies on the wire. A caller holding the body can ask
-	// this instead of sizing against the worst case — the difference is
-	// roughly sixfold for prose.
+	// Fits measures this exact delivery instead of the worst case — roughly
+	// sixfold more room for prose.
 	Fits(d Delivery) (ok bool, wireBytes int, err error)
-	// Adopt latches the target from an inbound MCP request's _meta. It is a
-	// no-op where the target comes from the environment. Calling it on every
-	// request is free and is the recommended usage: a request without meta
-	// cannot then strand the caller.
+	// Adopt latches the target from an inbound request's _meta, and is a
+	// no-op where the target came from the environment. Call it on every
+	// request.
 	Adopt(meta map[string]any) error
 	// Close releases any connection held.
 	Close() error
@@ -189,46 +121,33 @@ type options struct {
 	mode         udsmsg.Mode
 }
 
-// WithSenderName sets how this process is named to the harness: the attribution
-// on a delivered Claude message, and the client name Codex records in thread
-// metadata. It is identification, not authority — the harness derives identity
-// from the socket credentials and from having spawned us, never from this.
+// WithSenderName names this process in the delivered message. Identification,
+// not authority: a name is composed by its sender.
 //
-// Without it the executable's own name is used, which is right for a deployed
-// binary and misleading under `go run`, where it is "main".
+// Without it the executable's name is used, which reads as "main" under
+// `go run`.
 func WithSenderName(name string) Option {
 	return func(o *options) { o.senderName = name }
 }
 
-// WithReplyAddress makes deliveries repliable, by naming an inbox of the
-// caller's own — "uds:<socket path>", as udsmsg.Server.Addr returns.
+// WithReplyAddress makes deliveries repliable by naming an inbox of the
+// caller's own, as udsmsg.Server.Addr returns. Without it a delivery is
+// one-way: there is nothing on this side to answer to.
 //
-// Without it a delivery is one-way by construction: this package pushes into
-// its harness and there is nothing on this side to answer to. With it, the
-// address appears in the envelope the model sees, so a reply is the harness's
-// ordinary reply-to-the-sender rather than a different tool.
-//
-// The caller owns the inbox and therefore owns who may write to it. Identity
-// on that side is the kernel's answer, not the address: a reply arrives
-// authenticated as a peer, which proves only that it came from a session able
-// to read the inbox's key file — compare Peer.PID against the pid of the
-// harness socket to get parent-only.
+// The caller owns that inbox and who may write to it. A reply authenticated
+// as a peer proves only that the sender could read the key file — compare
+// Peer.PID against the harness socket's pid for parent-only.
 func WithReplyAddress(addr string) Option {
 	return func(o *options) { o.replyAddress = addr }
 }
 
-// WithDetectedMode establishes this process's permission posture by reading
-// it from the session that spawned us, and asserts that.
+// WithDetectedMode derives this process's permission posture from the session
+// that spawned it. A posture is a claim nothing can verify, so deriving is the
+// only safe way to produce one; see udsmsg.DetectParentMode.
 //
-// This is the call to reach for. The posture is a claim nothing can verify,
-// so the one safe way to produce it is to derive it: see
-// udsmsg.DetectParentMode for what it establishes, which is narrow.
-//
-// When the posture cannot be established this asserts NOTHING rather than
-// guessing, and the message may then be held — which is the correct outcome,
-// since the only guess that would help is the one that spends permission the
-// user did not give. Call udsmsg.DetectParentMode directly if you want the
-// reason why.
+// When it cannot be established, nothing is asserted and the message may be
+// held. That is correct: the only guess that would help is the one that spends
+// permission the user did not give.
 func WithDetectedMode() Option {
 	return func(o *options) {
 		if m, err := udsmsg.DetectParentMode(); err == nil {
@@ -237,11 +156,9 @@ func WithDetectedMode() Option {
 	}
 }
 
-// Open returns a Deliverer for whichever harness launched this process.
-//
-// It never returns nil: when no harness can be reached the result reports that
-// through Available, because "which harness launched me" is a state a caller has to
-// explain to a model rather than an error it can retry.
+// Open returns a Deliverer for whichever harness launched this process. It
+// never returns nil: with no harness reachable, the result says so through
+// Available, which a caller can show a model.
 func Open(opts ...Option) Deliverer {
 	var o options
 	for _, opt := range opts {
@@ -253,14 +170,12 @@ func Open(opts ...Option) Deliverer {
 	if sock := os.Getenv(EnvClaudeSocket); sock != "" {
 		return newClaude(sock, os.Getenv(EnvClaudeToken), o.senderName, o.replyAddress, o.mode)
 	}
-	// Deliberately no environment channel for Codex. CODEX_THREAD_ID is real
-	// — codex-rs injects it into SHELL TOOL environments (protocol/src/
-	// shell_environment.rs, core/src/tasks/user_shell.rs at rust-v0.154.0) —
-	// but nothing in codex-rs/mcp-server sets it, so an MCP server never
-	// receives one from its harness. A value found there came from somewhere
-	// else: a stale export, a parent process, another agent on the same box.
-	// Latching it would deliver into a thread this process was never given,
-	// and would look like it had worked.
+	// Deliberately no environment channel for Codex. An MCP server is handed
+	// no thread by its harness, so a thread id found in this process's
+	// environment was put there by something that never chose this process as
+	// a target — a stale export, a parent, another agent on the same machine.
+	// Latching one would deliver into a thread nobody gave us, and would look
+	// like it had worked.
 	//
 	// The target therefore comes only from Adopt, which reads the threadId the
 	// harness stamps into each request. Until then the backend reports itself
@@ -278,19 +193,12 @@ const (
 )
 
 // ClearEnvForTesting unsets every environment variable this package reads to
-// find a harness, and returns a function restoring exactly what was there.
+// find a harness, returning a function that restores them.
 //
-// A test binary inherits its launching harness's environment, which makes it
-// indistinguishable from the process that ought to be delivering — so a suite
-// that exercises a delivery path without this fires its fixtures into a live
-// conversation. That has happened; it is why this exists.
-//
-// It lives here rather than in each caller because the list of variables that
-// must be cleared is the list this package reads, and a caller enumerating
-// them by hand is correct only until this package learns another one. A guard
-// that clears the Claude pair alone still delivers from a Codex shell-tool
-// child, whose target arrives in CODEX_THREAD_ID and which no amount of
-// unsetting CLAUDE_CODE_MESSAGING_SOCKET touches.
+// A test binary inherits its harness's environment, so a suite exercising a
+// delivery path without this fires its fixtures into a live conversation.
+// That has happened. It lives here because the list to clear is the list this
+// package reads, and a copy in a caller goes stale.
 func ClearEnvForTesting() func() {
 	saved := map[string]*string{}
 	for _, k := range harnessEnv {
@@ -353,11 +261,8 @@ var errNoMeta = fmt.Errorf("request meta carries no %s", metaThreadID)
 // thread id", which a caller passing every request should ignore.
 func IsNoThreadID(err error) bool { return err == errNoMeta }
 
-// compose renders a delivery as the text the model will see.
-//
-// The cursor travels with the message so the model can re-fetch from it
-// without the caller having to restate it, and so a truncated or lost Body
-// still leaves an anchor in the transcript.
+// compose renders a delivery as the text the model sees. The cursor travels
+// with it so a lost or cut Body still leaves an anchor to re-fetch from.
 func compose(d Delivery) string {
 	var b strings.Builder
 	b.WriteString(d.Body)

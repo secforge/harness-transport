@@ -187,10 +187,8 @@ func TestClaudeMaxIntactBytesLeavesRoomForEscaping(t *testing.T) {
 func TestObservationStrings(t *testing.T) {
 	for o, want := range map[Observation]string{
 		ObservedNothing:  "nothing",
-		ObservedTurnRan:  "turn-ran",
 		ObservedAccepted: "accepted",
 		ObservedStored:   "stored",
-		ObservedConsumed: "consumed",
 	} {
 		if got := o.String(); got != want {
 			t.Errorf("Observation(%d) = %q, want %q", int(o), got, want)
@@ -198,25 +196,23 @@ func TestObservationStrings(t *testing.T) {
 	}
 }
 
-// CODEX_THREAD_ID is ignored, whatever it holds. codex-rs injects it into
-// shell tool environments but nothing in its MCP server does, so a value seen
-// here came from somewhere that never chose this process as a target —
-// latching it would deliver into someone else's thread and look successful.
-func TestCodexIgnoresTheThreadEnvironmentVariable(t *testing.T) {
+// The Codex target comes from Adopt and from nowhere else. This pins the
+// absence rather than a behaviour: the backend must report itself unavailable
+// on a fresh Open whatever the environment holds, because an environment
+// nobody guaranteed is not a source of targets.
+func TestCodexHasNoTargetUntilAdopted(t *testing.T) {
 	t.Setenv(EnvClaudeSocket, "")
-	t.Setenv("CODEX_THREAD_ID", "01a0-from-somewhere-else")
 
 	d, ok := Open().(*codexBackend)
 	if !ok {
 		t.Fatal("with no Claude socket the Codex backend should be selected")
 	}
 	if d.thread != "" {
-		t.Errorf("thread = %q; nothing in the environment may supply one", d.thread)
+		t.Errorf("thread = %q; nothing outside Adopt may supply one", d.thread)
 	}
 	if ok, reason := d.Available(); ok {
 		t.Errorf("an un-adopted backend must report itself unavailable, said: %s", reason)
 	}
-	// Adopt remains the only way in, and still works.
 	if err := d.Adopt(map[string]any{"threadId": "01a0-from-metadata"}); err != nil {
 		t.Fatalf("Adopt: %v", err)
 	}
@@ -225,11 +221,35 @@ func TestCodexIgnoresTheThreadEnvironmentVariable(t *testing.T) {
 	}
 }
 
+// Open must not consult the environment when selecting or configuring the
+// Codex backend. A source check rather than a behavioural one, because the
+// behaviour it guards against is a single line someone could add back.
+func TestOpenReadsNoEnvironmentForCodex(t *testing.T) {
+	src, err := os.ReadFile("deliver.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(src)
+	start := strings.Index(body, "c := newCodex")
+	if start < 0 {
+		start = strings.Index(body, "return newCodex")
+	}
+	if start < 0 {
+		t.Fatal("cannot find where Open selects the Codex backend")
+	}
+	end := strings.Index(body[start:], "\n}\n")
+	if end < 0 {
+		t.Fatal("cannot find the end of Open")
+	}
+	if strings.Contains(body[start:start+end], "os.Getenv") {
+		t.Error("Open reads the environment for the Codex backend; the target must come from Adopt alone")
+	}
+}
+
 // A process no harness spawned has nothing inherited and nothing to adopt, and
 // must say so rather than looking for a session to talk to.
 func TestProcessWithNoHarnessHasNoTarget(t *testing.T) {
 	t.Setenv(EnvClaudeSocket, "")
-	t.Setenv("CODEX_THREAD_ID", "")
 	t.Setenv("CODEX_HOME", t.TempDir())
 
 	ok, reason := Open().Available()

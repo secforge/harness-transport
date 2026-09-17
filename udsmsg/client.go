@@ -26,18 +26,13 @@ type Client struct {
 // refused before a byte is written: the pid has been recycled, and the socket
 // now belongs to someone else.
 //
-// DIALLING WITHOUT A TOKEN IS NOT PORTABLE, and fails invisibly where it
-// fails. A receiver with authRequired drops every line and destroys the
-// connection, logging only to itself: no error frame, no reason code, so the
-// caller sees an abrupt close indistinguishable from a crash or a timeout.
-// That is off on Linux and macOS, where an unauthenticated connection is
-// accepted, and ON BY DEFAULT ON WINDOWS. So the same tokenless code works in
-// development and dies silently in the one place it is hardest to debug.
-//
-// Presenting a wrong token fails identically, so always sending an EMPTY
-// frame would not help either. What helps is not dialling without one:
-// Dial refuses unless Target.Unauthenticated says otherwise, which turns a
-// silent failure on one platform into a local error on every platform.
+// DIALLING WITHOUT A TOKEN IS NOT PORTABLE. An inbox requiring authentication
+// drops every line and closes with no error frame and no reason — an abrupt
+// close indistinguishable from a crash. Authentication is optional on Linux
+// and macOS and on by default on Windows, so tokenless code works in
+// development and dies silently where it is hardest to debug. A wrong token
+// fails identically. Dial therefore refuses unless Target.Unauthenticated
+// says otherwise, turning that into a local error everywhere.
 func Dial(ctx context.Context, t Target) (*Client, error) {
 	if t.PID != 0 && t.ProcStart != "" && !Alive(t.PID, t.ProcStart) {
 		return nil, fmt.Errorf("pid %d is not the process that published %s", t.PID, t.SocketPath)
@@ -123,14 +118,10 @@ func (c *Client) SendUser(u User) (msgID string, err error) {
 	return u.MsgID, nil
 }
 
-// BuildUserFrame renders a User as the frame that would be sent, filling in
-// the fields SendUser fills in. It is exported so a caller can measure what a
-// send would cost without sending it — see EncodedUserSize — with no second
-// construction that could drift from this one.
-//
-// It takes a pointer because it completes the User in place: a caller that
-// measures and then sends reuses the same generated msg_id rather than
-// getting a different one on each call.
+// BuildUserFrame renders a User as the frame SendUser would send, so a caller
+// can measure one without sending it (see EncodedUserSize) and the two cannot
+// drift. It completes the User in place, so measuring then sending reuses the
+// same generated msg_id.
 func BuildUserFrame(u *User) (*Frame, error) {
 	if u.MsgID == "" {
 		u.MsgID = NewMsgID()
@@ -159,13 +150,10 @@ func BuildUserFrame(u *User) (*Frame, error) {
 	}, nil
 }
 
-// EncodedUserSize reports how many bytes the frame for u would occupy on the
-// wire, newline included, and whether that is within the line cap.
-//
-// A line over the cap costs the whole connection rather than just the
-// message, so a caller holding a large body should ask this rather than
-// reason about escaping: JSON inflates "<", ">", "&" and control characters
-// six-fold, which no rule of thumb about quotes and newlines predicts.
+// EncodedUserSize reports the frame's size on the wire, newline included, and
+// whether it fits the line cap. Worth asking rather than estimating: an
+// oversize line costs the connection, and JSON inflates "<", ">" and "&"
+// sixfold.
 func EncodedUserSize(u User) (size int, fits bool, err error) {
 	f, err := BuildUserFrame(&u)
 	if err != nil {

@@ -5,11 +5,10 @@ import (
 	"fmt"
 )
 
-// The app server speaks a JSON-RPC dialect, not JSON-RPC 2.0: there is no
-// "jsonrpc" member on any frame. A request is {id, method, params?, trace?},
-// a response {id, result} or {id, error}, and a notification {method, params}
-// with no id. A generic JSON-RPC client that stamps "jsonrpc":"2.0" and
-// expects it back will not interoperate, which is why this is hand-rolled.
+// The app server speaks a JSON-RPC dialect, not JSON-RPC 2.0: no frame carries
+// a "jsonrpc" member. A request is {id, method, params?}, a response
+// {id, result} or {id, error}. A generic client stamping "jsonrpc":"2.0" will
+// not interoperate, which is why this is hand-rolled.
 
 // RequestID is a request identifier: a string or an integer.
 type RequestID struct {
@@ -21,9 +20,9 @@ type RequestID struct {
 // IntID returns a numeric request id.
 func IntID(n int64) RequestID { return RequestID{Num: n, IsID: true} }
 
-// StringID returns a string request id.
-func StringID(s string) RequestID { return RequestID{Str: s, IsID: true} }
-
+// MarshalJSON renders the id as the string or number it is. Without this a
+// request carries an object where the server expects a scalar, and no response
+// can be correlated with the call that asked for it.
 func (r RequestID) MarshalJSON() ([]byte, error) {
 	if r.Str != "" {
 		return json.Marshal(r.Str)
@@ -75,14 +74,6 @@ type Message struct {
 // IsResponse reports whether the message answers one of our requests.
 func (m *Message) IsResponse() bool { return m.ID != nil && m.Method == "" }
 
-// IsNotification reports whether the message is a server notification, which
-// carries a method and no id and expects nothing back.
-func (m *Message) IsNotification() bool { return m.ID == nil && m.Method != "" }
-
-// IsServerRequest reports whether the server is asking us something and
-// expects a response — an approval prompt, for instance.
-func (m *Message) IsServerRequest() bool { return m.ID != nil && m.Method != "" }
-
 // Error is a JSON-RPC error object.
 type Error struct {
 	Code    int64           `json:"code"`
@@ -107,13 +98,9 @@ const (
 	CodeOverloaded     = -32001
 )
 
-// IsMethodNotFound reports whether err is the server rejecting a method it
-// does not know.
-//
-// Only -32601 counts. Invalid request (-32600) is what a malformed params
-// object earns — a missing or misspelled field — and treating that as an
-// unknown method turns "you sent the wrong field name" into "your daemon is
-// too old", which sends the reader off in entirely the wrong direction.
+// IsMethodNotFound reports the server rejecting a method it does not know.
+// Only -32601 counts: -32600 is a malformed params object, and reading that
+// as an unknown method turns "wrong field name" into "your daemon is old".
 func IsMethodNotFound(err error) bool {
 	var e *Error
 	if !asError(err, &e) {

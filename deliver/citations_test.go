@@ -8,19 +8,11 @@ import (
 	"testing"
 )
 
-// A comment that cites a test by name is a claim that something is
-// guaranteed. When the named test does not exist, the claim is worse than
-// silence: a reader who checks the reasoning finds it sound, finds a
-// citation, and stops — so the absence of the guard is hidden by the
-// description of it.
-//
-// This is not hypothetical. A downstream consumer of this package documented
-// that its only cut-detection marker rested on this library's formatting,
-// named the test pinning that behaviour, and the test did not exist anywhere
-// in its repository. The formatting changed three times that evening.
-//
-// The check is cheap: every Test[A-Z]… identifier mentioned anywhere in the
-// module, minus every one actually defined in a _test.go file.
+// Citing a test by name claims something is guaranteed, and a citation to a
+// test that does not exist hides the absence of the guard behind a
+// description of it. That has happened downstream: a documented marker named
+// the test pinning it, no such test existed, and the format changed three
+// times that evening.
 func TestEveryCitedTestExists(t *testing.T) {
 	cited, defined := scanCitations(t, "..")
 	if len(defined) == 0 {

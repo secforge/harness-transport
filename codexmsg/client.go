@@ -15,12 +15,9 @@ import (
 // DialTimeout bounds the connect and upgrade.
 const DialTimeout = 10 * time.Second
 
-// Client is a connection to a Codex app-server daemon.
-//
-// Unlike Claude Code's mesh — a socket per session, peers addressing each
-// other directly — Codex is a hub: one daemon owns every thread, and a client
-// names a thread by id or by name. So there is one connection here, not one
-// per correspondent, and it multiplexes.
+// Client is a connection to a Codex app-server daemon. Codex is a hub rather
+// than a mesh: one daemon owns every thread, so there is one connection here,
+// not one per correspondent, and it multiplexes.
 type Client struct {
 	ws     *wsConn
 	nextID atomic.Int64
@@ -32,9 +29,7 @@ type Client struct {
 	closed  bool
 	err     error
 
-	notifications chan *Message
-	serverReqs    chan *Message
-	done          chan struct{}
+	done chan struct{}
 }
 
 // Options configure a connection.
@@ -45,10 +40,6 @@ type Options struct {
 	// "/daemon/shutdown" asks a managed daemon to stop and is refused by one
 	// that is not managed, so it is never sent by default.
 	Path string
-	// NotificationBuffer sizes the channel served by Notifications. A full
-	// channel drops the oldest notification rather than stalling the reader
-	// loop, which would deadlock every in-flight call.
-	NotificationBuffer int
 }
 
 // Dial connects to the daemon's control socket and performs the WebSocket
@@ -87,38 +78,13 @@ func Dial(ctx context.Context, opt Options) (*Client, error) {
 		return nil, fmt.Errorf("websocket upgrade on %s: %w", path, err)
 	}
 
-	buf := opt.NotificationBuffer
-	if buf <= 0 {
-		buf = 256
-	}
 	c := &Client{
-		ws:            ws,
-		pending:       map[string]chan *Message{},
-		notifications: make(chan *Message, buf),
-		serverReqs:    make(chan *Message, 16),
-		done:          make(chan struct{}),
+		ws:      ws,
+		pending: map[string]chan *Message{},
+		done:    make(chan struct{}),
 	}
 	go c.readLoop()
 	return c, nil
-}
-
-// Notifications returns the stream of server notifications — turn output,
-// item deltas, session events. A notification arriving with nobody reading is
-// dropped rather than blocking the connection.
-func (c *Client) Notifications() <-chan *Message { return c.notifications }
-
-// ServerRequests returns requests the server makes of us, such as approval
-// prompts. Answer one with Respond; ignoring them leaves the server waiting.
-func (c *Client) ServerRequests() <-chan *Message { return c.serverReqs }
-
-// Done is closed when the connection ends. Err then says why.
-func (c *Client) Done() <-chan struct{} { return c.done }
-
-// Err returns the error that ended the connection, if any.
-func (c *Client) Err() error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.err
 }
 
 // readLoop demultiplexes everything the server sends.
@@ -144,27 +110,11 @@ func (c *Client) readLoop() {
 			if ok {
 				ch <- &m
 			}
-		case m.IsServerRequest():
-			select {
-			case c.serverReqs <- &m:
-			default:
-			}
-		case m.IsNotification():
-			select {
-			case c.notifications <- &m:
-			default:
-				// Drop the oldest to make room: a slow consumer should lose
-				// history, not wedge the connection.
-				select {
-				case <-c.notifications:
-				default:
-				}
-				select {
-				case c.notifications <- &m:
-				default:
-				}
-			}
 		}
+		// Everything else the daemon sends — notifications, and requests it
+		// would like answered — is read and discarded. This client exists to
+		// put a message into a thread; draining the rest is what keeps the
+		// connection from stalling behind an unread frame.
 	}
 }
 
@@ -244,34 +194,6 @@ func (c *Client) Call(ctx context.Context, method string, params, out any) error
 		}
 		return nil
 	}
-}
-
-// Notify sends a notification, which expects no response.
-func (c *Client) Notify(method string, params any) error {
-	msg := map[string]any{"method": method}
-	if params != nil {
-		msg["params"] = params
-	}
-	line, err := json.Marshal(msg)
-	if err != nil {
-		return err
-	}
-	return c.write(line)
-}
-
-// Respond answers a server request.
-func (c *Client) Respond(id RequestID, result any, rpcErr *Error) error {
-	msg := map[string]any{"id": id}
-	if rpcErr != nil {
-		msg["error"] = rpcErr
-	} else {
-		msg["result"] = result
-	}
-	line, err := json.Marshal(msg)
-	if err != nil {
-		return err
-	}
-	return c.write(line)
 }
 
 func (c *Client) write(line []byte) error {

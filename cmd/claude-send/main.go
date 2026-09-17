@@ -41,14 +41,11 @@ func isTerminal(f *os.File) bool {
 	return fi.Mode()&os.ModeCharDevice != 0
 }
 
-// accepter returns a predicate deciding whether a frame that reached our inbox
-// is from the process we addressed.
-//
-// Identity on this transport is the peer's SO_PEERCRED pid, which the sender
-// cannot forge; the `from` address in a frame is merely asserted. A socket
-// addressed by an opaque 16-hex name carries no pid, so there is nothing to
-// compare and everything is accepted — the progress line says so rather than
-// implying a check that did not happen.
+// accepter decides whether a frame that reached our inbox came from the
+// process we addressed. Identity is the peer's SO_PEERCRED pid, which no
+// sender can forge; a frame's `from` is merely asserted. A socket name
+// carrying no pid leaves nothing to compare, and the progress line says so
+// rather than implying a check that did not happen.
 func accepter(target udsmsg.Target, anySender bool, progress func(string, ...any)) func(*udsmsg.Peer) bool {
 	if anySender {
 		return func(*udsmsg.Peer) bool { return true }
@@ -254,7 +251,9 @@ func send(o options, text string) int {
 		progress("inbox %s", srv.Path())
 
 		if o.announce != "" {
-			entry, err = udsmsg.NewSessionEntry(srv.Path(), o.announce)
+			// What this is: a command-line tool holding an inbox, not a
+			// session. Saying "interactive" would claim to be one.
+			entry, err = udsmsg.NewSessionEntry(srv.Path(), o.announce, "cli", "cli")
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "claude-send: build registry entry: %v\n", err)
 				return exitError
@@ -320,13 +319,10 @@ func send(o options, text string) int {
 	return await(ctx, o, replies, msgID, progress)
 }
 
-// await blocks on the inbox until the wait condition is met.
-//
-// With --wait reply it returns on the first answer. With --wait replies it
-// stays for the whole --timeout, printing every answer as it arrives: a peer
-// can say more than one thing, and the second thing is often the useful one.
-// Collecting is therefore not a failure when the window ends — it is how it
-// ends, so a window that produced answers exits 0.
+// await blocks on the inbox until the wait condition is met. --wait reply
+// returns on the first answer; --wait replies stays for the whole timeout,
+// printing each as it arrives, since the second thing a peer says is often
+// the useful one. A window that produced answers exits 0.
 func await(ctx context.Context, o options, replies <-chan *udsmsg.Frame, msgID string,
 	progress func(string, ...any)) int {
 

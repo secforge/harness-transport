@@ -7,40 +7,34 @@ import (
 	"unicode"
 )
 
-// A session writes its attribution into the prompt itself, as an element
-// inside message.content, and a recipient shows an accepted one as an
-// attributed message with the markup gone. Sending bare text instead delivers
-// an anonymous prompt — no sender name, no address to answer.
+// Attribution is an element inside message.content; an accepted one is shown
+// as an attributed message with the markup gone, and bare text arrives
+// anonymous — no sender name, no address to answer.
 //
-// What the receiver requires of the element was measured against Claude Code
-// 2.1.272 on 2026-09-17, by sending variants to a live session and reading
-// which arrived as attributed messages and which arrived as raw markup:
+// What the element requires was measured against Claude Code 2.1.272 on
+// 2026-09-17, by sending variants to a live session and reading which arrived
+// attributed and which arrived as raw markup. Three things are required:
 //
-//   - the newline after the open tag and before the close tag are REQUIRED
-//   - a "<" or ">" inside an attribute value is REQUIRED to be absent
-//   - a literal newline inside an attribute value is REQUIRED to be absent
+//   - the newline after the open tag and before the close tag
+//   - no "<" or ">" inside an attribute value
+//   - no literal newline inside an attribute value
 //
-// Everything else that looks load-bearing is not: attribute order, single
-// spaces between attributes, a closing tag appearing inside the body, the
-// length of a name, and invisible characters in one were all accepted. All
-// three attributes are optional, and with no from-name the receiver displays
-// the sender's pid instead.
+// Nothing else is: attribute order, single spaces, a closing tag in the body,
+// name length and invisible characters were all accepted, and all three
+// attributes are optional (with no from-name the sender's pid is shown).
 //
-// A double quote in a name is the one case that neither breaks nor survives:
-// it closes the attribute early, so the name is silently truncated there.
-// ScrubName removes it to protect the name rather than the envelope.
+// A double quote neither breaks nor survives — it closes the value early and
+// the name is silently truncated. ScrubName removes it to protect the name.
 
-// MsgVersion is the envelope version a session stamps on a user frame. What a
-// recipient does with it is not observable from outside, so we send what
-// sessions were seen to send.
+// MsgVersion is what sessions were seen to stamp on a user frame. What a
+// recipient does with it is not observable.
 const MsgVersion = 1
 
-// PriorityNext is the queue priority sessions were observed to send. Whether
-// others are accepted, and what they would do, is not observable from here.
+// PriorityNext is the queue priority sessions were observed to send.
 const PriorityNext = "next"
 
-// Element name and the attributes. This order is the one a captured session
-// frame used; it is not required, and was measured not to be.
+// Element name and attributes, in the order a captured frame used — measured
+// not to be required.
 const (
 	csElement = "cross-session-message"
 	attrFrom  = "from"
@@ -101,15 +95,11 @@ func (cs CrossSession) Wrap(text string) string {
 	return b.String()
 }
 
-// ScrubName removes from a sender name the characters measured to matter, and
-// nothing else. An angle bracket or a literal newline inside an attribute
-// costs the whole element, which is why they go; a double quote costs the rest
-// of the name, which is why it goes too. They are removed rather than escaped
-// because no escaping was ever observed in a session's own frame.
-//
-// Everything a name may otherwise contain is left alone: a 5000-rune name and
-// an invisible character were both accepted whole, so nothing here shortens or
-// sanitises beyond what was shown to be necessary.
+// ScrubName removes only what was measured to matter: an angle bracket or
+// newline costs the whole element, a double quote costs the rest of the name.
+// Removed rather than escaped, since no session frame was seen to escape.
+// Everything else is left alone — a 5000-rune name and an invisible character
+// were both accepted whole.
 func ScrubName(name string) string {
 	name = strings.Map(func(r rune) rune {
 		switch r {
@@ -136,22 +126,18 @@ var wrapperRe = regexp.MustCompile(`(?s)\A<` + csElement + `\b([^>]*)>\n(.*)\n</
 // attrRe pulls one attribute out of the open tag.
 var attrRe = regexp.MustCompile(`([a-z-]+)="([^"]*)"`)
 
-// Unwrap parses an attributed message, returning the attribution and the body.
+// Unwrap parses an attributed message into the attribution and the body.
 //
-// The element must span the WHOLE content: the pattern is anchored, so an
-// envelope sitting inside a larger body does not match and its attribution is
-// never reported alongside text that is not part of it. That anchoring is the
-// property worth having here.
+// The element must span the WHOLE content — the pattern is anchored — so an
+// envelope quoted inside a larger body is not reported as attribution for it.
 //
-// Attributes this package does not model are ignored rather than fatal, and
-// nothing re-renders the parsed result to check it. Reading our own mail does
-// not require reproducing the receiving harness's verdict on what counts as
-// attributed — and a parser that answered that question would break on any
-// attribute the protocol grew, by construction and in silence.
+// Unknown attributes are ignored rather than fatal, and nothing re-renders the
+// result to check it: reading our own mail does not require reproducing a
+// harness's verdict, and a parser that tried would break on any attribute the
+// protocol grew.
 //
-// What this does NOT do is authenticate anyone. Every attribute here is a
-// claim the sender composed, from-name included. Identity comes from the
-// kernel's credentials on the connection, which no sender can choose.
+// This authenticates nobody. Every attribute is a claim the sender composed;
+// identity comes from the kernel's credentials on the connection.
 func Unwrap(content string) (cs CrossSession, body string, ok bool) {
 	m := wrapperRe.FindStringSubmatch(content)
 	if m == nil {

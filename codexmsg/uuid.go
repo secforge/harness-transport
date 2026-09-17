@@ -8,17 +8,6 @@ import (
 	"time"
 )
 
-// NewUUID returns a random version 4 UUID.
-func NewUUID() string {
-	var b [16]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		panic("codexmsg: crypto/rand failed: " + err.Error())
-	}
-	b[6] = (b[6] & 0x0f) | 0x40
-	b[8] = (b[8] & 0x3f) | 0x80
-	return format(b)
-}
-
 // NewUUIDv7 returns a time-ordered version 7 UUID, the shape the Codex CLI
 // uses for a queued message id. Ordering makes queued messages sort by when
 // they were created, which a random v4 would not.

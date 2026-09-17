@@ -22,12 +22,10 @@ const MaxSocketPath = 107
 // one this package is willing to resolve and send to.
 var addrRe = regexp.MustCompile(fmt.Sprintf(`^%s:.{1,%d}$`, SchemeUDS, MaxSocketPath))
 
-// dialNameRe is what this package will CONNECT TO. It is deliberately wider:
-// refusing to answer an address because its name is unfamiliar costs a reply,
-// while the name itself grants nothing — safety here comes from the directory
-// being 0700 and ours (CheckDir) and from the kernel's credentials, not from
-// the spelling. It still excludes anything that is not a plain ".sock" leaf:
-// no separators, no traversal, no empty stem.
+// dialNameRe is what this package will CONNECT TO, deliberately wider than
+// what it binds: a name grants nothing, safety comes from CheckDir and the
+// kernel's credentials, and refusing an unfamiliar one only costs a reply. It
+// still excludes anything that is not a plain ".sock" leaf.
 var dialNameRe = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}\.sock$`)
 
 // ValidAddress reports whether addr is a well-shaped reply address. Shape is

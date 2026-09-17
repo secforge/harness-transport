@@ -10,9 +10,9 @@ import (
 	"time"
 )
 
-// PeerFeatures are the capabilities a session advertises in its registry
-// entry. reply_across_default_dirs is what lets a peer accept a reply address
-// outside the standard socket directories.
+// PeerFeatures are the capability strings a session was observed to advertise
+// in its registry entry. They are reproduced so an entry looks like the ones
+// alongside it; what a reader does with them is not observable from here.
 var PeerFeatures = []string{"notify_idle", "reply_across_default_dirs", "artifact_yield"}
 
 // SessionEntry is a registry record, ~/.claude/sessions/<pid>.json. Publishing
@@ -40,7 +40,12 @@ type SessionEntry struct {
 
 // NewSessionEntry fills in a registry record for this process, describing the
 // given inbox.
-func NewSessionEntry(socketPath, name string) (*SessionEntry, error) {
+//
+// Kind and entrypoint come from the caller because only the caller knows what
+// this process is. They are not defaulted: an entry that says "interactive"
+// when it is not claims to be something else, and every reader of the registry
+// takes that at face value.
+func NewSessionEntry(socketPath, name, kind, entrypoint string) (*SessionEntry, error) {
 	now := time.Now().UnixMilli()
 	pid := os.Getpid()
 	cwd, _ := os.Getwd()
@@ -52,8 +57,8 @@ func NewSessionEntry(socketPath, name string) (*SessionEntry, error) {
 		Version:             "2.1.272",
 		PeerProtocol:        1,
 		PeerFeatures:        PeerFeatures,
-		Kind:                "interactive",
-		Entrypoint:          "cli",
+		Kind:                kind,
+		Entrypoint:          entrypoint,
 		MessagingSocketPath: socketPath,
 		Name:                name,
 		NameSource:          "user",
@@ -70,43 +75,6 @@ func NewSessionEntry(socketPath, name string) (*SessionEntry, error) {
 		e.PIDDomain = pd
 	}
 	return e, nil
-}
-
-// NewMCPEntry builds a registry entry for an MCP server's own inbox.
-//
-// Registering is what lets the harness identify a reply target by name. It
-// does NOT stop a reply being held for approval — measured, two sessions,
-// registered and unregistered targets alike: the hold is a receive-side
-// policy on cross-session sends and no addressing choice avoids it. But an
-// MCP server is not a session, so the entry must not read like one: the name
-// carries BOTH the harness session it belongs to and the MCP server it is,
-// and the kind says what it actually is rather than borrowing "interactive".
-//
-// harnessName is the parent session's own name — ParentSessionName reads it
-// from the registry — and mcpName is the server's configured name, the one
-// that appears as mcp:<name> in an attribution.
-func NewMCPEntry(socketPath, harnessName, mcpName string) (*SessionEntry, error) {
-	e, err := NewSessionEntry(socketPath, mcpEntryName(harnessName, mcpName))
-	if err != nil {
-		return nil, err
-	}
-	e.Kind = "mcp"
-	e.Entrypoint = "mcp"
-	return e, nil
-}
-
-// mcpEntryName composes the display name: the harness first, since that is
-// the thing a reader is placing it against, then the server.
-func mcpEntryName(harnessName, mcpName string) string {
-	switch {
-	case harnessName == "" && mcpName == "":
-		return "mcp"
-	case harnessName == "":
-		return "mcp:" + mcpName
-	case mcpName == "":
-		return harnessName + " · mcp"
-	}
-	return harnessName + " · mcp:" + mcpName
 }
 
 // sessionEntryPath is the registry file for a pid.

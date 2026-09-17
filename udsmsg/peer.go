@@ -33,11 +33,7 @@ type Peer struct {
 // Authenticated reports whether the connection presented a valid token.
 func (p *Peer) Authenticated() bool { return p.Authed }
 
-// ErrPeerCredsUnavailable is returned by peerCred where the operating system
-// exposes no way to ask the kernel who is on the other end of a socket.
-//
-// It is a distinct error rather than a zero-valued Peer because the two mean
-// opposite things. A Peer whose PID is 0 reads as an identity; this says no
-// identity was established, so a caller enforcing anything on the strength of
-// one has to decide what to do rather than carry on holding nothing.
+// ErrPeerCredsUnavailable is returned where the system offers no way to ask
+// who is on the other end. A distinct error rather than a zero Peer, because
+// a PID of 0 reads as an identity while this says none was established.
 var ErrPeerCredsUnavailable = errors.New("peer credentials are not available on this platform")

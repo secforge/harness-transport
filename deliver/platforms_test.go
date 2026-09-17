@@ -6,13 +6,10 @@ import (
 	"testing"
 )
 
-// This library is consumed by a project that publishes five platform binaries
-// from one tree, so a compile break on any of them is not an inconvenience —
-// it stops a release, and it is discovered at the worst possible moment.
-//
-// It happened: SO_PEERCRED went in with no build tag, and the first thing to
-// notice was a cross-compile during publication. Building here means the
-// break surfaces on the commit that causes it.
+// A consumer publishes five platform binaries from one tree, so a compile
+// break on any of them stops a release. It happened once: SO_PEERCRED went in
+// with no build tag and surfaced during publication. Building here moves that
+// to the commit that causes it.
 func TestEveryReleasePlatformBuilds(t *testing.T) {
 	if testing.Short() {
 		t.Skip("cross-compiling every target is slow")

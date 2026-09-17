@@ -10,7 +10,8 @@ that host a model and the MCP servers it runs.
   `docs/claude-uds-messaging.adoc`.
 * `codexmsg` — Codex's app-server protocol: a JSON-RPC dialect over a
   WebSocket on a unix socket. Published by OpenAI; this follows
-  `/source/open-source/codex` at **rust-v0.154.0**.
+  `/source/open-source/codex` at **rust-v0.154.0**; see
+  `docs/codex-app-server-messaging.adoc`.
 * `deliver` — one interface over both, for an MCP server pushing a message
   into the host that launched it.
 
@@ -225,12 +226,14 @@ children at exec:
 | Client | Claude Code | Codex |
 |---|---|---|
 | MCP server | `CLAUDE_CODE_MESSAGING_SOCKET` + child token | `_meta.threadId` on each tool call → `Adopt` |
-| hook, shell tool, any child | same environment | `CODEX_THREAD_ID` in the environment |
+| hook, shell tool, any child | same environment | not served — see below |
 
-`Open` latches `CODEX_THREAD_ID` when it is present, so a Codex child that is
-not an MCP server never needs to call `Adopt` — and a thread from the
-environment is latched on the same terms as one from metadata, so a second,
-different thread still disables delivery rather than retargeting.
+`Open` reads no environment variable for Codex. A thread id is taken only from
+the metadata on a tool call, through `Adopt`, and latched once: a second,
+different thread disables delivery rather than retargeting. A Codex child that
+is not an MCP server sees no tool metadata and so is not served — deliberately,
+because the only other candidate is an environment this process was not
+necessarily given.
 
 A process **no harness spawned** has nothing inherited and nothing to adopt.
 `Available` says so, and that is deliberate: addressing a session you did not
@@ -263,9 +266,8 @@ untrusted content. The target comes from the process relationship instead:
   session spawned. The *peer* token in `~/.claude/sessions/*.key` is readable by
   any process of the same uid — that one is an address book, and this package
   never touches it.
-* **Codex** — from the tool call. The Codex harness injects `CODEX_THREAD_ID` into
-  shell-tool children but *not* into MCP servers; it stamps `threadId` into
-  each MCP request's `_meta` instead. `Adopt` latches that once. A second,
+* **Codex** — from the tool call. The harness stamps `threadId` into each MCP
+  request's `_meta`, and `Adopt` latches that once. A second,
   different thread id means two sessions are reaching one MCP process, so the
   backend disables itself permanently rather than retargeting.
 

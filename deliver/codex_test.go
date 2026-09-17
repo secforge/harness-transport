@@ -195,12 +195,6 @@ func TestCodexDeliverVerifiesTheEcho(t *testing.T) {
 	if r.Observation != ObservedStored {
 		t.Errorf("Observation = %v, want stored when the echo matches", r.Observation)
 	}
-	if !r.EchoVerified {
-		t.Error("EchoVerified should be true when the daemon echoed the same bytes")
-	}
-	if r.Ref != "thread-a/sub-1" {
-		t.Errorf("Ref = %q, want thread and submission for a later re-read", r.Ref)
-	}
 	select {
 	case got := <-d.lastText:
 		if !strings.Contains(got, "relayed content") || !strings.Contains(got, "c-1") {
@@ -213,7 +207,7 @@ func TestCodexDeliverVerifiesTheEcho(t *testing.T) {
 
 // A receipt that does not echo what was sent must not be reported as stored:
 // acknowledgement and integrity fail independently, which is the whole reason
-// EchoVerified exists.
+// the observation distinguishes the two.
 func TestCodexReportsAMismatchedEchoHonestly(t *testing.T) {
 	d := startFakeDaemon(t)
 	d.mangleEcho = func(s string) string { return s[:len(s)/2] }
@@ -227,9 +221,6 @@ func TestCodexReportsAMismatchedEchoHonestly(t *testing.T) {
 	}
 	if r.Observation != ObservedAccepted {
 		t.Errorf("Observation = %v, want accepted — acknowledged but not verified", r.Observation)
-	}
-	if r.EchoVerified {
-		t.Error("EchoVerified must be false when the echo did not match")
 	}
 	if !strings.Contains(r.Detail, "re-read from the cursor") {
 		t.Errorf("Detail should point at the cursor fallback: %q", r.Detail)
@@ -254,12 +245,9 @@ func TestCodexRefusesOversize(t *testing.T) {
 	}
 
 	// Refusal is decided on what the daemon counts, not on the floor.
-	r, err := c.Deliver(context.Background(), Delivery{Cursor: "c", Body: strings.Repeat("x", codexMaxChars+1)})
+	_, err = c.Deliver(context.Background(), Delivery{Cursor: "c", Body: strings.Repeat("x", codexMaxChars+1)})
 	if err == nil {
 		t.Fatal("a message over the daemon's character limit must be refused before it is sent")
-	}
-	if r.Truncated {
-		t.Error("the message was refused, not truncated")
 	}
 	if !strings.Contains(err.Error(), "characters") {
 		t.Errorf("the error should be stated in the units the daemon enforces: %v", err)

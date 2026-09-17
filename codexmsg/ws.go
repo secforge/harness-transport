@@ -15,16 +15,10 @@ import (
 )
 
 // A minimal RFC 6455 client, enough to speak to the app server and no more.
-//
-// The daemon frames its unix socket with WebSocket (tokio-tungstenite), not
-// with the newline-delimited JSON the stdio and TCP transports use, so a raw
-// socket write is not understood. Only the client half is implemented, and
-// only the parts the app server exercises: a text frame per JSON-RPC message,
-// continuation frames on read, ping/pong, and close.
-//
-// This is deliberately dependency-free, like the rest of this module: pulling
-// a WebSocket library in for one handshake and one frame codec would cost more
-// than it saves.
+// The daemon frames its unix socket with WebSocket, not the newline-delimited
+// JSON its stdio transport uses, so a raw write is not understood. Only the
+// client half is here: a text frame per message, continuation frames on read,
+// ping/pong and close — dependency-free, like the rest of this module.
 
 // wsGUID is the constant RFC 6455 appends to the client key before hashing.
 const wsGUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"

@@ -52,32 +52,18 @@ func defaultSenderName() string {
 // attribution wrapper and the cursor trailer.
 const claudeOverhead = 8 << 10
 
-// worstCaseEscape is how much JSON encoding can inflate a body, measured
-// rather than assumed (encoding/json, 2026-09-15, 1000-byte samples):
-//
-//	a           x1    "  \  \n   x2    <  >  &  0x01   x6
-//
-// The x6 cases are the ones that matter and the ones easy to miss: Go
-// escapes <, > and & to \u003c-style sequences by default, so HTML, XML,
-// code, or a quoted protocol envelope inflates six-fold where prose does not
-// inflate at all. An earlier version of this file reserved a factor of two,
-// which was true of quotes and newlines and false of every angle bracket.
+// worstCaseEscape is how far JSON encoding can inflate a body, measured
+// (encoding/json, 2026-09-15): x1 for prose, x2 for quotes and newlines, x6
+// for <, > and & — which Go escapes to \u003c-style sequences, so markup and
+// quoted envelopes inflate sixfold where prose does not inflate at all.
 const worstCaseEscape = 6
 
-// MaxIntactBytes returns a floor rather than the true ceiling.
+// MaxIntactBytes is a floor, not the ceiling. An oversize line costs the whole
+// connection, so the number must hold for content nobody inspected: the cap
+// divided by worstCaseEscape.
 //
-// The receiver caps a line at 1 MiB and drops the whole CONNECTION over it,
-// not merely the message, so this number has to hold for content the caller
-// has not looked at. It is therefore the cap divided by the worst-case
-// escape expansion — see worstCaseEscape — and not by the factor of two that
-// quotes and newlines would suggest.
-//
-// The result is far below what ordinary text achieves: a 1,000,019-byte
-// payload of prose enveloped to 1,014,898 bytes and arrived whole, because
-// barely 1.4% of it needed escaping. This answers a different question —
-// "what may I send without having inspected it" — and a caller sizing a split
-// wants this one. A caller that has the body in hand can ask Fits instead and
-// use the real ceiling.
+// Ordinary text goes far higher — a 1,000,019-byte body of prose enveloped to
+// 1,014,898 and arrived whole. A caller holding the body can ask Fits instead.
 func (c *claudeBackend) MaxIntactBytes() (int, error) {
 	return (udsmsg.MaxLineBytes - claudeOverhead) / worstCaseEscape, nil
 }
@@ -104,12 +90,11 @@ func (c *claudeBackend) Available() (bool, string) {
 		return false, fmt.Sprintf("the harness session's inbox at %s is gone, so the harness that launched this process is no longer listening", c.socket)
 	}
 	if c.token == "" {
-		// Not a warning. A receiver that requires authentication destroys an
-		// unauthenticated connection and sends no reason, which is the
-		// default on Windows — so delivering without the inherited token
-		// would work here and fail invisibly elsewhere. Every process a
-		// session spawns is given the token, so its absence means this
-		// process was not spawned by the session it is pointed at.
+		// An inbox requiring authentication closes an unauthenticated
+		// connection without a reason, so delivering tokenless would work
+		// here and fail invisibly elsewhere. Every spawned process is given
+		// the token: its absence means this one was not spawned by that
+		// session.
 		return false, "the harness session's inbox is there, but no child token was inherited — " +
 			"this process was not started by that session, and delivering without the token would " +
 			"be refused without explanation on a harness that requires it"
@@ -132,7 +117,7 @@ func (c *claudeBackend) Deliver(ctx context.Context, d Delivery) (Receipt, error
 		// Refuse rather than cut: an oversize line costs the whole
 		// connection, and a silently shortened message is the failure this
 		// package exists to avoid.
-		return Receipt{SentBytes: len(text)}, fmt.Errorf(
+		return Receipt{}, fmt.Errorf(
 			"message is %d bytes, over the %d the harness session will accept intact; "+
 				"deliver a shorter body and leave the rest to be fetched from the cursor",
 			len(text), max)
@@ -155,29 +140,24 @@ func (c *claudeBackend) Deliver(ctx context.Context, d Delivery) (Receipt, error
 
 	client, err := udsmsg.Dial(ctx, target)
 	if err != nil {
-		return Receipt{SentBytes: len(text)}, fmt.Errorf("the harness session did not accept a connection: %w", err)
+		return Receipt{}, fmt.Errorf("the harness session did not accept a connection: %w", err)
 	}
 	defer client.Close()
 
-	// The address is carried twice on purpose: on the frame, where the
-	// harness sends delivery status, and inside the envelope, which is what
-	// the model sees and replies to. Empty in both places leaves the
-	// delivery one-way, as it is by default.
-	msgID, err := client.SendUser(udsmsg.User{
+	// The address is carried in both places it appears; empty in both leaves
+	// the delivery one-way, which is the default.
+	if _, err := client.SendUser(udsmsg.User{
 		Text: text,
 		From: c.replyTo,
-		// Set in both places a posture appears, so the two cannot
-		// disagree. Which of them a recipient reads is not observable
-		// from here.
+		// Set wherever a posture appears, so the two cannot disagree.
 		FromMode: c.mode,
 		Attribution: &udsmsg.CrossSession{
 			From: c.replyTo,
 			Name: name,
 			Mode: c.mode,
 		},
-	})
-	if err != nil {
-		return Receipt{SentBytes: len(text)}, fmt.Errorf("the message was not written to the harness session: %w", err)
+	}); err != nil {
+		return Receipt{}, fmt.Errorf("the message was not written to the harness session: %w", err)
 	}
 
 	return Receipt{
@@ -185,7 +165,5 @@ func (c *claudeBackend) Deliver(ctx context.Context, d Delivery) (Receipt, error
 		Detail: "Written to the Claude Code harness session's inbox, which accepted the connection and the bytes. " +
 			"This transport sends no receipt for a message it accepts, so arrival in the session's context is unverified — " +
 			"treat the message as probably sent, not as read.",
-		SentBytes: len(text),
-		Ref:       msgID,
 	}, nil
 }

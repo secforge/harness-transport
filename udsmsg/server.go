@@ -48,51 +48,36 @@ type Config struct {
 	// RequireAuth rejects every line from a connection that has not
 	// presented a valid token.
 	RequireAuth bool
-	// AllowUnidentifiedPeers accepts connections whose credentials the
-	// kernel will not report — which is every connection on a platform
-	// without SO_PEERCRED or LOCAL_PEERCRED. Off by default: identity here
-	// is a pid and a start time, so an unidentified peer cannot be held to
-	// anything a caller might be checking.
+	// AllowUnidentifiedPeers accepts connections the kernel will not name —
+	// every connection on a platform without SO_PEERCRED. Off by default,
+	// since an unidentified peer cannot be checked against anything.
 	AllowUnidentifiedPeers bool
 	// PublishKey writes the key file so peers can discover PeerToken.
 	PublishKey bool
 	// ModeSource says where this inbox's permission posture comes from:
-	// nowhere, so none is asserted, or derived from the spawning session.
-	//
-	// It names a SOURCE and can never name a posture. The posture is a value
-	// a receiver acts on and cannot verify, and a struct field is the thing
-	// people fill in — so the only way to assert one here is to have it
-	// derived, and the only way to claim one is the function that says so in
-	// its name (Server.AssertModeUnverified).
+	// nowhere, or derived from the spawning session. It names a SOURCE and
+	// cannot name a posture, so nothing here can state one outright.
 	ModeSource ModeSource
 	// FirstLineTimeout overrides the deadline for a connection's first
 	// complete line. Zero uses FirstLineTimeout.
 	//
-	// No caller sets this, and it stays anyway: it is the seam that lets the
-	// documented 30-second deadline be exercised without a test waiting 30
-	// seconds. The same is true of Path above. A sweep for unused fields will
-	// find both — they earn their place by making behaviour observable, not
-	// by being called.
+	// Unused by callers, and kept — with Path above — as the seam that makes
+	// the documented deadline testable without waiting 30 seconds.
 	FirstLineTimeout time.Duration
 	Handler          Handler
 }
 
-// ModeSource says where an inbox's asserted permission posture comes from.
-// There is no value meaning "whatever the caller says", and no way elsewhere
-// to supply one: a posture is either established or absent.
+// ModeSource says where an inbox's permission posture comes from. There is no
+// value meaning "whatever the caller says": it is established or absent.
 type ModeSource int
 
 const (
-	// ModeSourceNone asserts no posture, which a receiver may answer with a
-	// hold — the cost of saying nothing, and cheaper than saying something
-	// unverified.
+	// ModeSourceNone asserts no posture, which may cost a hold — cheaper
+	// than asserting something unverified.
 	ModeSourceNone ModeSource = iota
-	// ModeSourceDerived reads the posture from the spawning session and
-	// asserts nothing if it cannot, binding either way. Detection needs
-	// /proc, so it works on Linux and errors on darwin and windows — and
-	// binding anyway is the point: failing to detect costs a hold, while
-	// refusing to bind would cost the whole return path on three of the five
-	// platforms this ships on.
+	// ModeSourceDerived reads the posture from the spawning session, and
+	// binds anyway if it cannot: detection needs /proc, so refusing to bind
+	// would cost the return path on three of the five platforms shipped.
 	ModeSourceDerived
 )
 
@@ -174,13 +159,9 @@ func Listen(cfg Config) (*Server, error) {
 	return s, nil
 }
 
-// allocSocketPath picks the first usable standard directory and a socket name
-// carrying our pid plus a discriminator.
-//
-// The directory is one of the standard ones because that is where this
-// transport's sockets live and where CheckDir's guarantee holds. The name
-// carries our pid so a peer can attribute the inbox to a process, and the
-// discriminator keeps it from being mistaken for a real session's.
+// allocSocketPath picks the first standard directory passing CheckDir, and a
+// name carrying our pid — so a peer can attribute the inbox — plus a
+// discriminator, so it is not mistaken for a session's own.
 func allocSocketPath() (string, error) {
 	var disc [4]byte
 	if _, err := rand.Read(disc[:]); err != nil {
@@ -293,15 +274,10 @@ func (s *Server) handleConn(ctx context.Context, conn *net.UnixConn) {
 
 	peer, err := peerCred(conn)
 	if err != nil {
-		// Identity in this protocol IS the kernel's answer — a pid and a
-		// start time — so a connection we cannot identify is one we cannot
-		// hold to anything. Carrying on with an empty Peer would hand every
-		// caller a PID of 0 that reads like a process, which on a platform
-		// with no such call would be every connection, silently.
-		//
-		// So it is refused unless the caller has said otherwise. That is a
-		// decision about what an absent identity means, and it belongs to
-		// whoever is enforcing something with it rather than to this file.
+		// Identity here is the kernel's answer, so an unidentifiable
+		// connection cannot be held to anything — and an empty Peer would
+		// hand callers a PID of 0 that reads like a process. Refused unless
+		// the caller decides otherwise.
 		if !s.cfg.AllowUnidentifiedPeers {
 			s.report(fmt.Errorf("refusing a connection whose peer could not be identified "+
 				"(set AllowUnidentifiedPeers to accept these): %w", err))
@@ -329,9 +305,7 @@ func (s *Server) handleConn(ctx context.Context, conn *net.UnixConn) {
 		}
 		if len(line) > 0 {
 			if first {
-				// A complete first line arrived; the deadline has served
-				// its purpose.
-				_ = conn.SetReadDeadline(time.Time{})
+				_ = conn.SetReadDeadline(time.Time{}) // deadline served
 			}
 			consumed := s.dispatch(ctx, peer, line, first)
 			first = false
@@ -432,12 +406,9 @@ func readLine(r *bufio.Reader, max int) (line []byte, complete bool, err error) 
 	}
 }
 
-// logf reports something worth knowing that is not a dropped frame or an I/O
-// error. It goes to the standard logger: a caller that wants these elsewhere
-// redirects that, and one that wants silence gets it by not hitting the
-// conditions. An earlier version wrote to an optional Logger nobody ever set,
-// which made every line here unreachable — including the one warning that a
-// posture could not be established.
+// logf reports what is neither a dropped frame nor an I/O error, to the
+// standard logger. An earlier version wrote to an optional Logger nobody set,
+// which made every line here unreachable.
 func (s *Server) logf(format string, args ...any) {
 	log.Printf("udsmsg: "+format, args...)
 }

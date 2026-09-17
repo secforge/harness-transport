@@ -70,17 +70,13 @@ func Alive(pid int, procStart string) bool {
 }
 
 // DetectParentMode reports the permission posture of the session that spawned
-// this process.
-//
-// from_mode is a claim, and nothing here can verify one, so it must never be
-// invented. What this establishes is therefore narrow: that a spawning
-// session exists and is running — its pid comes from the socket it exported,
-// and its process must be readable. Given that, it reports the one posture
-// ever observed on this wire. It reports nothing else, because nothing else
-// has been observed.
+// this process. A posture is a claim nothing here can verify, so what this
+// establishes is narrow: that a spawning session exists and is running. Given
+// that, it reports the one posture ever observed on this wire, and nothing
+// else.
 //
 // An error means assert nothing, which costs a hold at worst. It needs /proc,
-// so it errors on platforms without one rather than assuming.
+// so it errors elsewhere rather than assuming.
 func DetectParentMode() (Mode, error) {
 	sock := os.Getenv(EnvMessagingSocket)
 	if sock == "" {

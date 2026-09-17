@@ -39,12 +39,6 @@ func ControlSocketPath(codexHome string) string {
 	return filepath.Join(codexHome, controlDirName, controlSocketName)
 }
 
-// StartupLockPath returns the lock file beside the control socket, held while
-// a daemon is starting.
-func StartupLockPath(codexHome string) string {
-	return filepath.Join(codexHome, controlDirName, startupLockName)
-}
-
 // DefaultSocket resolves the control socket for the current environment and
 // checks that it is usable.
 func DefaultSocket() (string, error) {

@@ -48,8 +48,7 @@ func TestDeliverReachesTheParentSession(t *testing.T) {
 	p := startParent(t)
 	d := newClaude(p.srv.Path(), "test-token", "test-client", "", udsmsg.ModePrompting)
 
-	r, err := d.Deliver(context.Background(), Delivery{Cursor: "c-99", Body: "a relayed message"})
-	if err != nil {
+	if _, err := d.Deliver(context.Background(), Delivery{Cursor: "c-99", Body: "a relayed message"}); err != nil {
 		t.Fatalf("Deliver: %v", err)
 	}
 
@@ -64,9 +63,6 @@ func TestDeliverReachesTheParentSession(t *testing.T) {
 	// Attributed, so the receiving session shows who delivered it.
 	if _, _, wrapped := udsmsg.Unwrap(text); !wrapped {
 		t.Errorf("the message should carry attribution: %q", text)
-	}
-	if r.Ref != f.MsgID {
-		t.Errorf("Ref = %q, want the msg_id %q for a later re-read", r.Ref, f.MsgID)
 	}
 }
 
@@ -85,9 +81,6 @@ func TestClaudeNeverClaimsArrival(t *testing.T) {
 	if r.Observation != ObservedNothing {
 		t.Fatalf("Observation = %v; this transport sends no receipt, so nothing stronger can be honest", r.Observation)
 	}
-	if r.EchoVerified {
-		t.Error("EchoVerified must be false: nothing was echoed")
-	}
 	if !strings.Contains(r.Detail, "unverified") {
 		t.Errorf("Detail must say arrival is unverified, got %q", r.Detail)
 	}
@@ -105,12 +98,9 @@ func TestOversizeIsRefusedNotTruncated(t *testing.T) {
 	d := newClaude(p.srv.Path(), "test-token", "test-client", "", udsmsg.ModePrompting)
 	max, _ := d.MaxIntactBytes()
 
-	r, err := d.Deliver(context.Background(), Delivery{Cursor: "c", Body: strings.Repeat("x", max+1)})
+	_, err := d.Deliver(context.Background(), Delivery{Cursor: "c", Body: strings.Repeat("x", max+1)})
 	if err == nil {
 		t.Fatal("an oversize message must be refused")
-	}
-	if r.Truncated {
-		t.Error("nothing should ever be reported as truncated: the message was refused whole")
 	}
 	if !strings.Contains(err.Error(), "cursor") {
 		t.Errorf("the error should point at the cursor fallback: %v", err)

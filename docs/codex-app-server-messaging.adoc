@@ -1,0 +1,645 @@
+= Codex session messaging (`app-server-control`)
+:toc:
+:toclevels: 3
+:description: The local control protocol a Codex app-server daemon speaks — socket layout, WebSocket framing, the JSON-RPC dialect, the methods that reach a running session, and how to write a third-party client.
+:keywords: codex, codex-cli, app-server, unix socket, websocket, json-rpc, ipc, protocol, interoperability, messaging, thread
+
+Codex sessions on one machine do not talk to each other. They talk to a shared
+**app-server daemon**, which owns every thread; a client reaches a session by
+naming its thread on the daemon's control socket. This document calls that
+channel `app-server-control`, after the socket it binds.
+
+The shape of the thing, before any of the detail:
+
+[cols="1,3"]
+|===
+| Topology | Hub: one daemon owns every thread
+| Addressing | Thread UUID, or thread name
+| Identity | The `0600` socket, and nothing else
+| Framing | WebSocket text frames over `AF_UNIX`
+| Dialect | JSON-RPC, but not JSON-RPC 2.0
+| Attribution | None per message; the daemon records the client name from `initialize`
+| Reply path | None; a turn's output arrives as notifications on the same connection
+| Specification | 39 published JSON schemas and the Rust source
+|===
+
+This page documents **Codex CLI 0.154.0** (`linux-x64`), checked against the
+published source at tag `rust-v0.154.0`. See <<_provenance_and_caveats>> before
+relying on it.
+
+== Transport and discovery
+
+=== Socket location
+
+The daemon binds one control socket under the Codex home — `$CODEX_HOME`, else
+`~/.codex`:
+
+[source]
+----
+$CODEX_HOME/app-server-control/app-server-control.sock
+----
+
+A lock file sits beside it, held while a daemon is starting:
+
+[source]
+----
+$CODEX_HOME/app-server-control/app-server-startup.lock
+----
+
+Observed modes on Linux, and the constants that set them:
+
+[cols="2,1,3"]
+|===
+| Path | Mode | Set by
+
+| `app-server-control/` | `0700` | `SOCKET_DIR_MODE` in `codex-rs/uds`
+| `app-server-control.sock` | `0600` | `CONTROL_SOCKET_MODE` in the control-socket acceptor
+| `app-server-startup.lock` | `0644` | —
+|===
+
+WARNING: A Codex home contains a **second** socket, `ipc/ipc.sock`. That one is
+the IDE-context channel between the TUI and an editor extension. It carries no
+sessions and answers none of the methods below. Confusing the two is the first
+mistake a client makes.
+
+No environment variable exports the socket path. A client derives it from
+`$CODEX_HOME` and nothing else.
+
+==== The path-length trap
+
+`AF_UNIX` allows 108 bytes of `sun_path` on Linux, including the trailing NUL. A
+Codex home deep enough to push the socket path past that cannot be bound, and
+the CLI then falls back to an **embedded, in-process app server** rather than
+failing. Nothing announces this. The daemon a client is looking for simply never
+appears, while the CLI works normally, because each CLI process is now its own
+server and shares nothing.
+
+A client should measure the path and say so, rather than reporting "no daemon
+running".
+
+=== Wire format
+
+The control socket is **WebSocket-framed** (RFC 6455, via
+`tokio-tungstenite`), not newline-delimited JSON. NDJSON is the framing of the
+*stdio* and *TCP* transports only; bytes written raw at this socket are never
+parsed.
+
+A client therefore performs an ordinary HTTP upgrade over the connected unix
+socket:
+
+[source]
+----
+GET / HTTP/1.1
+Host: localhost
+Upgrade: websocket
+Connection: Upgrade
+Sec-WebSocket-Key: <base64 of 16 random bytes>
+Sec-WebSocket-Version: 13
+----
+
+The `Host` header is required by the handshake and meaningless here; the server
+does not inspect it. Each JSON-RPC message is one **text** frame. A client must
+mask every frame it sends, per the RFC; server frames are unmasked.
+
+==== The request target
+
+The path in the `GET` line is routed:
+
+[cols="2,4"]
+|===
+| Target | Behaviour
+
+| Anything but `/daemon/shutdown`
+| An ordinary control connection. `/` is the conventional choice.
+
+| `/daemon/shutdown`
+| Asks a *managed* daemon to stop. An unmanaged one rejects the upgrade with
+  `403 Forbidden` and the body `unmanaged server`.
+|===
+
+The shutdown handshake, once upgraded, is a mutual proof of locality: the client
+sends the daemon's own pid as a text frame, and the daemon echoes that pid back
+before shutting down. A frame that is not exactly the pid is ignored and nothing
+happens. A client that does not mean to stop the daemon must never send this
+target.
+
+== Authentication
+
+**The control socket has none.** There is no auth frame, no token and no
+handshake credential. Authority is the filesystem: a `0700` directory holding a
+`0600` socket, so only the owning uid can connect at all.
+
+IMPORTANT: The boundary is the uid, not a secret. Any process running as the
+same user can connect to the daemon and queue input into any of its threads.
+Treat the control socket as trusted-uid surface.
+
+A token scheme does exist in the app server — capability tokens and signed JWT
+bearer tokens, configured with `--ws-auth`, `--ws-token-file`,
+`--ws-shared-secret-file` and friends — but it guards **non-loopback TCP
+listeners**, which is a different transport from the one this document
+describes. None of it applies to the unix control socket.
+
+=== The two gates that do exist
+
+They are ordering and capability gates, not identity checks.
+
+[cols="2,4"]
+|===
+| Gate | Behaviour
+
+| `initialize` first
+| Any method called before the handshake is refused with
+  `-32600 Not initialized`.
+
+| `experimentalApi`
+| Some methods, `thread/queue/add` among them, are refused unless the
+  connection negotiated the capability:
+  `-32600 thread/queue/add requires experimentalApi capability`.
+|===
+
+== The JSON-RPC dialect
+
+The app server speaks a JSON-RPC *dialect*. **There is no `jsonrpc` member on
+any frame**, in either direction — it appears nowhere in the published schemas.
+A generic JSON-RPC 2.0 client that stamps `"jsonrpc":"2.0"` and expects it back
+will not interoperate.
+
+Frames are told apart by which fields are present:
+
+[cols="2,2,3"]
+|===
+| Frame | Shape | Direction
+
+| Request | `{id, method, params?, trace?}` | Either way
+| Response | `{id, result}` | Answering a request
+| Error | `{id, error}` | Answering a request
+| Notification | `{method, params?}` — no `id` | Either way, answered by nobody
+|===
+
+`id` is a string or a 64-bit integer. `trace` is an optional W3C Trace Context,
+`{traceparent, tracestate}`, and is never required.
+
+A client must handle **server requests** — a frame carrying both an `id` and a
+`method`. These are the daemon asking *the client* something, an approval prompt
+being the common case, and it waits for a response frame carrying that `id`.
+Ignoring them leaves the corresponding turn blocked.
+
+=== Errors
+
+An error frame carries `{code, message, data?}`.
+
+[cols="1,2,4"]
+|===
+| Code | Name | When
+
+| `-32600` | Invalid request | An unknown method name, a missing or misspelled params field, a capability that was not negotiated, `Not initialized`, and a thread that is not loaded.
+| `-32601` | Method not found | Defined, but not what this daemon returns for an unknown method — see the note below.
+| `-32602` | Invalid params | An input over the size limit; the only `-32602` observed.
+| `-32603` | Internal error | A thread id with no rollout behind it, and other storage failures.
+| `-32001` | Overloaded | Defined by the protocol; not observed here.
+|===
+
+NOTE: An unknown method does **not** produce `-32601`. It produces
+`+-32600 Invalid request: unknown variant `<method>`, expected one of …+`
+followed by the daemon's entire method vocabulary — 160 names in 0.154.0. That error is
+verbose, but it is also the most reliable capability probe available: one bad
+call enumerates exactly what this daemon answers. A client that tests for
+`-32601` to detect an old daemon will never see it.
+
+=== Size limit
+
+User input is capped at `MAX_USER_INPUT_TEXT_CHARS`, which is `1 << 20` =
+**1,048,576 characters** — characters, not bytes. The daemon refuses an oversize
+message rather than truncating it, and says so in a structured way:
+
+[source,json]
+----
+{
+  "code": -32602,
+  "message": "Input exceeds the maximum length of 1048576 characters.",
+  "data": {
+    "input_error_code": "input_too_large",
+    "max_chars": 1048576,
+    "actual_chars": 1048577
+  }
+}
+----
+
+Because every UTF-8 character costs at least one byte, a body inside a
+*byte* budget of N can never exceed N characters — so a byte count compared
+against this limit is conservative rather than wrong, but it is not the same
+quantity, and it refuses an accented or CJK body far too early.
+
+The limit is checked *after* the thread is resolved. Queueing an oversize
+message to a thread that does not exist reports the missing thread, not the
+size.
+
+== The handshake
+
+`initialize` must be the first call on every connection.
+
+[source,json]
+----
+{
+  "id": 1,
+  "method": "initialize",
+  "params": {
+    "clientInfo": { "name": "codex-send", "version": "0.1.0" },
+    "capabilities": { "experimentalApi": true }
+  }
+}
+----
+
+[cols="2,4"]
+|===
+| Field | Meaning
+
+| `clientInfo.name`
+| How this client identifies itself. The daemon records it as the thread's
+  `originator`, so it is visible afterwards in `thread/list` and `thread/read`.
+  This is the whole of Codex's attribution model: there is no per-message
+  sender, no reply address and no envelope inside the text.
+
+| `clientInfo.version`
+| Free-form.
+
+| `capabilities.experimentalApi`
+| Opts into experimental methods. `thread/queue/add` is refused without it.
+|===
+
+The result describes the daemon, not the client:
+
+[source,json]
+----
+{
+  "userAgent": "codex-send/0.154.0 (Ubuntu 24.4.0; x86_64) WindowsTerminal (protocol-capture; 0.1.0)",
+  "codexHome": "/root/.codex",
+  "platformFamily": "unix",
+  "platformOs": "linux"
+}
+----
+
+`userAgent` names the originator and version of the process that *started the
+daemon*, its OS and terminal, and then this client's `name` and `version` in
+parentheses. The shape varies by version; a client should not parse it.
+
+== Finding a session
+
+=== `thread/list`
+
+Returns one page of threads under `data`, with a `nextCursor`.
+
+[source,json]
+----
+{ "id": 2, "method": "thread/list", "params": { "limit": 25, "cursor": null } }
+----
+
+[cols="2,4"]
+|===
+| Param | Meaning
+
+| `archived` | `true` returns only archived threads; absent or `false`, only live ones.
+| `cursor` | Continues a previous page.
+| `limit` | Page size.
+| `cwd` | Restricts to threads whose session cwd matches exactly.
+|===
+
+CAUTION: The daemon sends a `nextCursor` **even when the page is empty**, so an
+empty page is not the end of the listing. Paginate until `nextCursor` is null or
+empty, or until it stops advancing.
+
+A thread record carries far more than a client needs, and the set varies by
+version. The fields worth naming:
+
+[cols="2,4"]
+|===
+| Field | Meaning
+
+| `id`, `sessionId` | The thread UUID. Both were the same value in every record sampled.
+| `name` | A user-assigned label, or null. This is what a `--thread <name>` argument matches.
+| `cwd` | The session's working directory.
+| `preview` | The opening text of the thread.
+| `createdAt`, `updatedAt`, `recencyAt` | **Unix seconds**, as integers — not strings.
+| `status` | `{"type": ...}`; see below.
+| `path` | The rollout file: `$CODEX_HOME/sessions/<yyyy>/<mm>/<dd>/rollout-<timestamp>-<id>.jsonl`.
+| `model`, `modelProvider`, `reasoningEffort` | What the session is running.
+| `originator` | The `clientInfo.name` of whoever created it.
+| `cliVersion` | The CLI version that created it.
+| `gitInfo` | `{sha, branch, originUrl}` for the session's repository, or null.
+| `canAcceptDirectInput` | Whether direct input is allowed; null on an unloaded thread.
+| `ephemeral`, `archived` | Lifecycle flags.
+|===
+
+==== Thread status
+
+`status.type` is the single most important field for a sender:
+
+[cols="2,4"]
+|===
+| Value | Meaning
+
+| `notLoaded` | The thread exists only as a rollout file on disk. No runtime is attached.
+| `idle` | Loaded, with no turn running.
+| `active` | A turn is running. The record also carries `activeFlags`.
+|===
+
+`thread/loaded/list` returns just the ids of loaded threads, which is the cheap
+form of the same question:
+
+[source,json]
+----
+{ "data": ["01a0ae17-56c6-7192-8d52-942d22efe312"], "nextCursor": null }
+----
+
+The distinction decides what queueing a message will do — see
+<<queue_add_may_start_a_turn>>.
+
+=== Resolving a name
+
+There is no lookup-by-name method. A client that accepts a human-typed target
+does what the CLI does: treat a canonical UUID as an id, and otherwise page
+`thread/list` comparing `name` exactly.
+
+== Message types
+
+These are the methods that put text in front of a running session.
+
+[[queue_add]]
+=== `thread/queue/add`
+
+Appends a message to a thread's queue. For a client whose job is to get a
+message to a session and nothing more, this is the method.
+
+Requires the `experimentalApi` capability.
+
+[source,json]
+----
+{
+  "id": 3,
+  "method": "thread/queue/add",
+  "params": {
+    "threadId": "01a0af0a-5b93-7c10-9f45-562584c7fc4a",
+    "input": [
+      { "type": "text", "text": "What time is it on your side?", "text_elements": [] }
+    ],
+    "clientUserMessageId": "01a0af0a-5c17-75b9-bf79-f805194851ca"
+  }
+}
+----
+
+[cols="2,4"]
+|===
+| Field | Meaning
+
+| `threadId`
+| The target thread. **camelCase.** The Rust struct declares `thread_id` and
+  serde renames it; sending `thread_id` earns
+  `+-32600 Invalid request: missing field `threadId`+`, which is a params error
+  however much it reads like an unsupported method.
+
+| `input`
+| An array of input items. A text item is
+  `{"type":"text","text":...,"text_elements":[]}`.
+
+| `input[].text_elements`
+| **snake_case, and required even when empty** — it is UI spans within `text`.
+  Omitting it is a params error.
+
+| `clientUserMessageId`
+| A caller-assigned id used to correlate this message with what comes back. The
+  CLI sends a UUIDv7, whose time ordering makes queued messages sort by creation.
+|===
+
+The response echoes what was stored:
+
+[source,json]
+----
+{
+  "queuedSubmission": {
+    "id": "01a0af0a-5c18-71b1-97ab-7d52b38ec4ed",
+    "input": [
+      { "type": "text", "text": "What time is it on your side?", "text_elements": [] }
+    ],
+    "clientUserMessageId": "01a0af0a-5c17-75b9-bf79-f805194851ca"
+  }
+}
+----
+
+`queuedSubmission.id` is the daemon's own id for the queued item, distinct from
+`clientUserMessageId`. Because the daemon echoes the stored content, a sender can
+compare it against what it sent and separate two different claims —
+*acknowledged* and *stored intact* — which fail separately.
+
+[[queue_add_may_start_a_turn]]
+==== Queueing may start a turn
+
+A queued message does not simply wait. `enqueue` wakes the thread if it is
+loaded, and a loaded, idle thread immediately dispatches the head of its queue
+as a new turn.
+
+[cols="2,4"]
+|===
+| Thread status when queued | What happens
+
+| `notLoaded` | The message sits in the queue. Nothing runs.
+| `idle` | A turn starts at once, and the item is removed from the queue.
+| `active` | The message waits behind the running turn.
+|===
+
+This was observed end to end: a `thread/queue/add` against a freshly started,
+idle thread was followed on the same connection by `thread/queue/changed`,
+`thread/status/changed` to `active`, `turn/started`, and an `item/started` of
+type `userMessage` carrying the text — with no `turn/start` call at any point.
+A subsequent `thread/queue/list` returned an empty queue, because the item had
+already been dispatched.
+
+A client must not assume queueing is inert.
+
+=== `turn/start`
+
+Sends input and starts a turn explicitly, rather than queueing it.
+
+[source,json]
+----
+{
+  "id": 4,
+  "method": "turn/start",
+  "params": {
+    "threadId": "01a0af0a-…",
+    "input": [ { "type": "text", "text": "…", "text_elements": [] } ],
+    "clientUserMessageId": "01a0af0a-…",
+    "cwd": "/source/harness-transport"
+  }
+}
+----
+
+`clientUserMessageId` and `cwd` are optional.
+
+=== `turn/steer`
+
+Redirects a turn that is already running. Takes `threadId` and an `input` array
+of the same shape.
+
+=== `turn/interrupt`
+
+Stops a running turn. It takes **both** ids:
+
+[source,json]
+----
+{ "id": 5, "method": "turn/interrupt", "params": { "threadId": "…", "turnId": "…" } }
+----
+
+Sending only `threadId` earns
+`+-32600 Invalid request: missing field `turnId`+`.
+The `turnId` comes from the `turn/started` notification, or from a thread's
+`turns`.
+
+=== `thread/start`
+
+Creates a new thread rather than addressing an existing one. `params` needs at
+least `cwd`. The result carries the whole new thread record under `thread`,
+alongside the settings it was created with — `model`, `modelProvider`,
+`approvalPolicy`, `approvalsReviewer`, `sandbox`, `reasoningEffort`,
+`multiAgentMode`, `runtimeWorkspaceRoots`.
+
+Note what those settings are and are not. `approvalPolicy` and `sandbox`
+describe the *thread's own* permission posture, recorded by the daemon at
+creation. They are not a claim a sender makes about itself — there is no field
+anywhere in this protocol in which a sender could make one, and the daemon
+accepts input from any client of the right uid regardless of how either side is
+configured.
+
+`thread/delete`, taking `threadId`, removes a thread again and returns `{}`.
+
+== Notifications
+
+Everything a turn produces arrives as notifications — not as a reply to the
+request that started it, and not on any socket of the sender's own. A client
+that queues a message and closes the connection sees nothing.
+
+[IMPORTANT]
+====
+Notifications are **not broadcast to every connection**, and a sender should not
+expect to read a turn it triggered.
+
+Two cases were captured, and they differ:
+
+* On a thread this connection had itself created with `thread/start`, the full
+  stream arrived: `thread/started`, `thread/queue/changed`,
+  `thread/status/changed`, `turn/started`, `item/started`, `item/completed`.
+* On a thread owned by another client, a connection attached to the same daemon
+  *before* the message was queued saw only `thread/status/changed`
+  (`active`, then `idle`). No `turn/started` and no `item/*` arrived, although
+  the turn ran to completion and its items were afterwards readable through
+  `thread/turns/list`.
+
+So thread-scoped output follows the owning connection, while status appears more
+widely. `thread/unsubscribe` in the method vocabulary points the same way. The
+exact subscription rule has not been established — what is established is that
+attaching to the daemon does not entitle a client to another thread's items.
+
+A sender that wants to see the result of a message it queued elsewhere should
+poll `thread/turns/list` and match on the `clientId` of the `userMessage` item,
+which carries the `clientUserMessageId` it sent. That path was verified end to
+end.
+====
+
+The notifications observed on an ordinary control connection:
+
+[cols="2,4"]
+|===
+| Method | Params
+
+| `thread/started` | `{thread}` — the full new thread record.
+| `thread/status/changed` | `{threadId, status}`, e.g. `{"type":"active","activeFlags":[]}`.
+| `thread/queue/changed` | `{threadId}` only. The queue changed; re-read it if it matters.
+| `turn/started` | `{threadId, turn}`, where `turn` is `{id, items, itemsView, status, error, startedAt, completedAt, durationMs}`.
+| `item/started` | `{item, threadId, turnId, startedAtMs}`.
+| `item/completed` | `{item, threadId, turnId, completedAtMs}`.
+| `mcpServer/startupStatus/updated` | `{threadId, name, status, error, failureReason}` — one per configured MCP server as the thread comes up.
+| `remoteControl/status/changed` | `{status, serverName, installationId, environmentId}`.
+|===
+
+An `item` carries its own `type` — `userMessage` for the message a client
+queued — with an `id`, the `clientId` echoing the sender's
+`clientUserMessageId`, and `content` in the same
+`{type, text, text_elements}` shape as the input.
+
+That `clientId` is how a sender correlates output with its own message.
+
+NOTE: There is no reply *address*, and nothing is ever delivered back to the
+sender's own process by the daemon. What a queued message produces appears in
+the receiving session's UI, and — subject to the scoping above — in this
+notification stream. A third-party sender's reliable route to the answer is to
+read it back from the thread, not to wait for it to arrive.
+
+== Writing a client
+
+In order:
+
+. Resolve `$CODEX_HOME` (env, else `~/.codex`) and build the control socket
+  path. Check its length against 108 bytes before anything else.
+. Connect the unix socket and perform the RFC 6455 client upgrade on `/`.
+. Call `initialize` with a `clientInfo.name` worth seeing in thread metadata,
+  and `capabilities.experimentalApi` if you intend to queue.
+. Resolve the target thread: a UUID as given, otherwise page `thread/list`
+  matching `name`.
+. `thread/queue/add`, and compare the echoed content against what you sent.
+. Stay connected and read notifications if you want to observe what happens.
+
+Pitfalls, in the order they usually bite:
+
+* Writing JSON lines at the socket. It is WebSocket-framed.
+* Stamping `"jsonrpc":"2.0"`. There is no such member.
+* Sending `thread_id` instead of `threadId`, or omitting `text_elements`.
+* Calling anything before `initialize`.
+* Treating `-32601` as the unknown-method signal.
+* Stopping pagination on an empty page.
+* Assuming a queued message waits.
+* Talking to `ipc/ipc.sock`.
+
+[#_provenance_and_caveats]
+== Provenance and caveats
+
+This protocol is not reconstructed from observation alone. Two independent kinds
+of evidence back it, and they agree:
+
+*Published source.* Codex is open source. Every structural claim above — the
+socket path helpers, `SOCKET_DIR_MODE` (`0700`), `CONTROL_SOCKET_MODE`
+(`0600`), the `/daemon/shutdown` upgrade routing and its pid handshake,
+`TurnInterruptParams` requiring both ids, `MAX_USER_INPUT_TEXT_CHARS` (`1 <<
+20`), the WebSocket auth options being `--ws-*` TCP-listener flags, and the
+`enqueue` → wake → start-if-idle path — was read from the Rust source at tag
+`rust-v0.154.0`, the tag matching the installed CLI. The 39 JSON schemas under
+`app-server-protocol/schema/json` supply the frame shapes, and it is those
+schemas that establish the absence of a `jsonrpc` member.
+
+*Observed.* Socket layout and file modes were read off a development host.
+Every request, response, error, receipt and notification quoted above was
+captured from a running 0.154.0 daemon by a third-party client: the
+`initialize` result, a `thread/list` page, `thread/loaded/list`, the unknown
+method and bad-params errors, the capability and `Not initialized` refusals, a
+`thread/queue/add` receipt with its echo, the oversize `-32602` with its `data`
+object, and the notification stream that followed. The success path was
+captured against a thread the capture created and deleted afterwards, so no
+existing session was written to.
+
+Where the two disagree, this document says so. One case is recorded above: the
+schema shipped with 0.154.0 does **not** contain `thread/queue/add`, although
+the daemon answers it and the CLI sends it. The schema lags the Rust source, so
+it is not a complete list of what a daemon will do.
+
+WARNING: This is an internal control protocol. It is published as source, which
+is not the same as being a supported interface — nothing obliges it to stay
+stable, and the method vocabulary, field names and capability gates can change
+in any release. Pin the Codex CLI version if a client depends on it, and
+re-verify after upgrades. The unknown-method error doubles as a cheap
+post-upgrade check, since it enumerates the whole vocabulary.
+
+This document exists to make an interoperable local client possible, and
+describes only what one process can observe of a daemon on a machine it
+controls.
+
+== See also
+
+* https://github.com/openai/codex[openai/codex] — the published source; `codex-rs/app-server`, `codex-rs/app-server-protocol` and `codex-rs/app-server-transport` are the crates this document describes, and `codex-rs/uds` binds the socket.
